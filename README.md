@@ -71,7 +71,7 @@ DSH 0.2.1-rc.2 的平台组合在 Windows 上是互斥的：
 
 ### 前置条件
 
-- Windows + DSH Desktop ≥ 0.2.0（在 0.2.1-rc.2 上开发与验证）
+- Windows + DSH Desktop 0.2.1-rc.2 及以上（本插件在该版本上开发与验证）
 - 本机已装 Git for Windows（或 MSYS2 / Cygwin）
 - 想用受限沙箱的话，见下面「已知限制」第 3 条
 
