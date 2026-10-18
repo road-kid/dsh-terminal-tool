@@ -11,8 +11,8 @@
  * missing `useEffect`, a control that never appears, an `onChange` wired to the
  * wrong handler.
  *
- * Run with `npm run rendertest`. Requires the dev-only `react`, `react-dom` and
- * `jsdom` packages (installed with `--no-save`; they are not dependencies).
+ * Run with `npm run rendertest`. Needs `react`, `react-dom` and `jsdom`, which
+ * are devDependencies only: the shipped bundle keeps react external.
  */
 
 import assert from 'node:assert/strict'

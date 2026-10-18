@@ -29,7 +29,7 @@ import {
   validateBashPath,
 } from '../src/paths.ts'
 import { discoverBash, scanBashCandidates } from '../src/discover.ts'
-import { createHandlers } from '../src/routes.ts'
+import { createHandlers, registerRoutes } from '../src/routes.ts'
 import { createRowController, createStore, INITIAL_ROW_STATE, knownPaths } from '../src/client/store.ts'
 import { executorConfig, snapshotConfig, wantsBash } from '../src/config.ts'
 
@@ -326,6 +326,62 @@ await test('/discover prefers the in-flight path over the saved one', async () =
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+await test('registerRoutes mounts both routes on the connection service', async () => {
+  const registered = []
+  const disposed = []
+  const scoped = {
+    get: (name) =>
+      name === 'connection'
+        ? {
+            fetch: {
+              register: (route) => {
+                registered.push(route)
+                return () => disposed.push(route.path)
+              },
+            },
+          }
+        : undefined,
+    effect: (callback) => callback(),
+  }
+  const ctx = { inject: (names, callback) => callback(scoped) }
+  registerRoutes(ctx, {
+    readSnapshot: () => snapshotConfig({ dialect: { get: () => 'bash' } }),
+    capability: () => ({ supported: true }),
+    settingsAvailable: () => true,
+    lastReplace: () => undefined,
+  })
+  assert.deepEqual(
+    registered.map((route) => route.path).sort(),
+    ['/api/dsh-terminal-tool/discover', '/api/dsh-terminal-tool/state'],
+  )
+  for (const route of registered) {
+    assert.deepEqual(route.methods, ['POST'])
+    assert.equal(route.requestBody, 'buffered')
+  }
+  // Both are POST-only JSON endpoints that answer 200 even when the handler
+  // throws, so the row can show the reason instead of a bare status code.
+  const state = registered.find((route) => route.path.endsWith('/state'))
+  const response = await state.fetch(
+    new Request('http://x/api/dsh-terminal-tool/state', { method: 'POST', body: '{}' }),
+  )
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.equal(body.dialect, 'bash')
+  assert.equal('candidates' in body, false)
+})
+
+await test('registerRoutes degrades when connection is absent', async () => {
+  const ctx = { inject: (names, callback) => callback({ get: () => undefined, effect: () => {} }) }
+  // Must not throw: a missing service leaves the host half working, and the
+  // row reports "settings unavailable" instead of taking the plugin down.
+  registerRoutes(ctx, {
+    readSnapshot: () => snapshotConfig({}),
+    capability: () => ({ supported: false, reason: 'nope' }),
+    settingsAvailable: () => false,
+    lastReplace: () => undefined,
+  })
 })
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`)

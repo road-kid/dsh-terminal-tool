@@ -241,7 +241,7 @@ npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / 客户端�
 npm run clientsmoke   # 真实执行 lib/client.js：模块装载形状、apply 注册行、无 configForms 时降级、迟到服务替换、HMR 幂等（8 项）
 npm run rowselftest   # 行状态机 13 项：/state 读取、乐观写入、自动发现持久化、各类失败提示
 npm run rendertest    # 在 jsdom 里真实渲染并点击：标题/胶囊/路径行/自动发现变下拉（9 项）
-npm run selftest      # 路径、发现、快照 26 项
+npm run selftest      # 路径、发现、快照、/api 路由注册 28 项
 npm run integration   # 在真实第一方服务上跑完整替换流程（5 项）
 npm run check         # 以上全部，一条命令
 ```
