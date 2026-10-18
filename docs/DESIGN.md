@@ -19,7 +19,7 @@ DSH 在 Windows 上只组合 PowerShell 执行器：`@deepseek-ai/dsh-base` 的�
 与 `tool-bash`），只留 `pwsh-sandbox` / `tool-pwsh`。结果是模型在 Windows 上只看得见
 `pwsh` 工具，而用户希望默认用本机 Git Bash。
 
-### 1.2 本插件的目标（功能对等清单）
+### 1.2 本插件的能力清单
 
 | # | 能力 | 交付方式 |
 |---|---|---|
