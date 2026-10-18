@@ -3,7 +3,9 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 
 import { Config, snapshotConfig, wantsBash, type RawConfig } from './config.ts'
 import { installSession } from './replace.ts'
+import { registerRoutes } from './routes.ts'
 import { writeDiagnostic } from './diag.ts'
+import type { CapabilityView, Dialect, ReplaceReport } from './shared/protocol.ts'
 
 /**
  * dsh-terminal-tool.
@@ -39,6 +41,38 @@ export function installResultFor(agentId: string): Awaited<ReturnType<typeof ins
   return results.get(agentId)
 }
 
+/** Most recent replacement attempt across all sessions (the settings row shows it). */
+let lastReplace: ReplaceReport | undefined
+
+/** Whether a service is visible on a context, without making it a hard dependency. */
+function visible(ctx: Context, name: string): boolean {
+  try {
+    return ctx.get(name) !== undefined
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Can this deployment switch the terminal tool at all?
+ *
+ * All three services are required for a real replacement: `tools` to add the
+ * `bash` tool and remove `pwsh`, `systemPrompt` to drop the pwsh guidance
+ * section, and `settings` to persist the choice. Reporting *which* one is
+ * missing is what makes a silent no-op diagnosable.
+ */
+export function probeCapability(ctx: Context): CapabilityView {
+  if (process.platform !== 'win32') return { supported: false, reason: '仅 Windows 支持切换终端工具' }
+  if (!visible(ctx, 'tools')) return { supported: false, reason: '当前 DSH 版本不提供 ctx.tools（无法隐藏 pwsh）' }
+  if (!visible(ctx, 'systemPrompt')) {
+    return { supported: false, reason: '当前 DSH 版本不提供 ctx.systemPrompt（无法压掉 pwsh 提示词）' }
+  }
+  if (!visible(ctx, 'settings')) {
+    return { supported: false, reason: '当前 DSH 版本不提供 ctx.settings（无法保存选择）' }
+  }
+  return { supported: true }
+}
+
 export function apply(ctx: Context, config: RawConfig): void {
   // A raw config may arrive unvalidated when the plugin is mounted by hand
   // (tests, other bundles). Validating here means load-time diagnostics are
@@ -48,6 +82,15 @@ export function apply(ctx: Context, config: RawConfig): void {
   if (!wantsBash(initial)) {
     writeDiagnostic('loaded with dialect=pwsh; sessions keep the platform terminal tool')
   }
+
+  // The settings row reads its state and candidates over `/api`; registering
+  // here keeps the read surface next to the writes it describes.
+  registerRoutes(ctx, {
+    readSnapshot: () => snapshotConfig(config),
+    capability: () => probeCapability(ctx),
+    settingsAvailable: () => visible(ctx, 'settings'),
+    lastReplace: () => lastReplace,
+  })
 
   /**
    * `agent/created` is dispatched with `ctx.serial` and awaited before agent
@@ -63,9 +106,17 @@ export function apply(ctx: Context, config: RawConfig): void {
       // session even before the loader reloads this fiber (F12).
       const result = await installSession(ctx, agent, snapshotConfig(config))
       results.set(id, result)
+      lastReplace =
+        result.status === 'installed'
+          ? { at: Date.now(), applied: true }
+          : { at: Date.now(), applied: false, reason: result.reason }
+      if (result.status === 'installed') {
+        writeDiagnostic(`installed session=${id} bash=${result.bashPath}`)
+      }
     } catch (error) {
       // Defensive: installSession already contains its own failures.
       results.set(id, { status: 'skipped', reason: 'mount-failed' })
+      lastReplace = { at: Date.now(), applied: false, reason: 'mount-failed' }
       writeDiagnostic(
         `error session=${id} unexpected ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
       )
@@ -80,4 +131,9 @@ export function apply(ctx: Context, config: RawConfig): void {
   ctx.on('agent/disposed', (payload: { agent: Agent }) => {
     results.delete(String(payload.agent.id))
   })
+}
+
+/** Exported for the selftest: the dialect a snapshot resolves to. */
+export function dialectOf(config: RawConfig): Dialect {
+  return snapshotConfig(config).dialect
 }

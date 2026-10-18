@@ -28,7 +28,9 @@ import {
   samePath,
   validateBashPath,
 } from '../src/paths.ts'
-import { discoverBash } from '../src/discover.ts'
+import { discoverBash, scanBashCandidates } from '../src/discover.ts'
+import { createHandlers } from '../src/routes.ts'
+import { createRowController, createStore, INITIAL_ROW_STATE, knownPaths } from '../src/client/store.ts'
 import { executorConfig, snapshotConfig, wantsBash } from '../src/config.ts'
 
 let passed = 0
@@ -243,6 +245,87 @@ await test('executorConfig passes plain values, not volatile wrappers', () => {
   const args = executorConfig(snapshot)
   assert.equal(args.timeoutMs, 45000)
   assert.equal(args.cwd, 'C:\\work')
+})
+
+// --- settings-row read surface ---------------------------------------------
+
+await test('scanBashCandidates returns every usable bash, not just the first', async () => {
+  const root = await fixture()
+  try {
+    const candidates = await scanBashCandidates({
+      bashPath: '',
+      bashCandidates: [root],
+      autoDiscover: true,
+      timeoutMs: 500,
+    })
+    // The fixture ships bin\bash.exe and usr\bin\bash.exe: the picker needs both,
+    // while discoverBash (a session needs one executor) stops at the first.
+    // Both fixtures appear; a real Git Bash on the machine may add more, so
+    // assert containment rather than an exact count.
+    assert.ok(candidates.every((candidate) => candidate.valid))
+    const paths = candidates.map((candidate) => pathKey(candidate.path))
+    assert.ok(paths.includes(pathKey(join(root, 'bin', 'bash.exe'))))
+    assert.ok(paths.includes(pathKey(join(root, 'usr', 'bin', 'bash.exe'))))
+    assert.equal(new Set(paths).size, paths.length, 'no duplicate paths')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+await test('scanBashCandidates keeps the saved path selectable', async () => {
+  const root = await fixture()
+  try {
+    const saved = join(root, 'bin', 'bash.exe')
+    const candidates = await scanBashCandidates({
+      bashPath: saved,
+      bashCandidates: [],
+      autoDiscover: true,
+      timeoutMs: 500,
+    })
+    // The saved path is ranked first; a real Git Bash on this machine may be
+    // listed after it, which is exactly the point of the picker.
+    assert.equal(candidates[0].source, 'configured')
+    assert.equal(pathKey(candidates[0].path), pathKey(saved))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+await test('/state reports the snapshot without scanning', async () => {
+  const handlers = createHandlers({
+    readSnapshot: () =>
+      snapshotConfig({ dialect: { get: () => 'bash' }, bashPath: { get: () => 'C:\Git\bin\bash.exe' } }),
+    capability: () => ({ supported: true }),
+    settingsAvailable: () => true,
+    lastReplace: () => ({ at: 1700000000000, applied: true }),
+  })
+  const state = handlers.state()
+  assert.equal(state.platform, process.platform)
+  assert.equal(state.dialect, 'bash')
+  assert.equal(state.bashPath, 'C:\Git\bin\bash.exe')
+  assert.equal(state.settingsAvailable, true)
+  assert.equal(state.capability.supported, true)
+  assert.equal(state.lastReplace?.applied, true)
+  // No candidates on the wire: a sweep spawns reg.exe, and this runs on mount.
+  assert.equal('candidates' in state, false)
+})
+
+await test('/discover prefers the in-flight path over the saved one', async () => {
+  const root = await fixture()
+  try {
+    const inFlight = join(root, 'bin', 'bash.exe')
+    const handlers = createHandlers({
+      readSnapshot: () => snapshotConfig({}),
+      capability: () => ({ supported: true }),
+      settingsAvailable: () => true,
+      lastReplace: () => undefined,
+    })
+    const view = await handlers.discover({ bashPath: inFlight })
+    assert.ok(view.candidates.length >= 1)
+    assert.equal(pathKey(view.candidates[0].path), pathKey(inFlight))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`)

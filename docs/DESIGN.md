@@ -60,7 +60,7 @@ bash 那一套」的接线。因此本项目的每条行为都跑在第一方代
 | 工具卡片渲染 | 官方 `tool.call.toolview` 的 `bash` 槽 |
 | 执行器（argv 里那把 bash） | **继承官方 `LocalBashExecutor`，只重写 argv 与 env** |
 | 类型 | 官方 `.d.ts`（devDependency，精确钉 `0.2.1-rc.2`） |
-| 设置 UI | **官方 settings 表单自动投影 volatile Config** |
+| 设置 UI | **自写客户端半区**（`src/client/`）：向 `settings.general.item` 注册「终端工具」行 |
 | 工具隐藏 / 提示词裁剪 | 官方 `tools.restrict()` / `systemPrompt.section()` |
 | 自动发现 | 自写（`discover.ts`，第一方无等价物） |
 | 每会话替换编排 | 自写（`replace.ts`，第一方无等价物） |
@@ -175,6 +175,14 @@ return this.extend({ [symbols.isolate]: shadow });
 | `src/replace.ts` | 每会话替换：校验、isolate、挂载、restrict、section、回滚 | ~200 |
 | `src/diag.ts` | 诊断日志（文件 + `DSH_TERMINAL_TOOL_DIAG_FILE`） | ~60 |
 | `src/types.ts` | 内部类型与可选服务的最窄投影 | ~80 |
+| `src/shared/protocol.ts` | Host/客户端线路协议：路由路径、常量、视图类型 | ~100 |
+| `src/routes.ts` | 两条只读 `/api` 路由（`/state` 不扫描、`/discover` 按需扫描） | ~180 |
+| `src/client/index.ts` | 客户端入口：注册 `settings.general.item` 行（`inject=['slots','locale']`） | ~110 |
+| `src/client/row.tsx` | 行组件：胶囊切换 + 路径输入/下拉 + 「自动发现」 | ~200 |
+| `src/client/store.ts` | 行状态机：读 `/state`、写 `configForms`、自动发现、错误降级 | ~250 |
+| `src/client/api.ts` | 两条路由的取数封装 | ~40 |
+| `src/client/styles.ts` | 行样式（官方 `--dsw-alias-*` 设计变量） | ~50 |
+| `src/client/locales.ts` | 中英文案（`row.*` 键） | ~50 |
 
 ### 3.2 组合形态（cordis.patch.yml，全文）
 
@@ -350,7 +358,8 @@ Git Bash 的 `git`/`ls`/`grep` 需要 `Git\bin`、`Git\usr\bin`、以及 `ucrt64
 | 类型 | `tsc --noEmit`（devDeps 钉 `@deepseek-ai/*@0.2.1-rc.2` 的真实 `.d.ts`） | 0 error |
 | 纯逻辑单测 | `node scripts/selftest.mjs` | 发现顺序、WSL 排除、路径校验、PATH 去重、env 组装（22 项） |
 | 执行器 | `scripts/integration.mjs` 在真实 `tool-bash` 下起真 Git Bash | `echo "$BASH_VERSION"` / `uname -s` → `MINGW64_NT-…` |
-| 契约 | `node scripts/contractcheck.mjs` | Config 字段全 volatile；patch 行 id/name/disabled 正确；导出面完整（10 项） |
+| 契约 | `node scripts/contractcheck.mjs` | Config 字段全 volatile；patch 行 id/name/disabled 正确；导出面完整；客户端 bundle 装载形状（13 项） |
+| 客户端半区 | `node scripts/clientsmoke.mjs` | 真实执行 `lib/client.js`：模块 id、react external、`inject` 面、`apply` 注册 `settings.general.item`、无 `configForms` 时降级为只读、重复 `apply` 幂等（7 项） |
 | 集成 | `node scripts/integration.mjs`：真实 `dsh-tools` / `dsh-system-prompt` / `dsh-tool-bash` / `dsh-scope` 挂在一次性 cordis 应用里 | `bash` 出现且 `pwsh` 消失、祖先 scope 仍见 `pwsh`、prompt 段被清空、真命令跑在 Git Bash 上、二次 install 幂等、`dialect=pwsh` 完全不替换、`apply()` 接线 `agent/created`+`agent/disposed`（5 项） |
 | 人工 | 装进 profile + 重启 + 新会话 | 模型工具目录只有 `bash`；卡片与退出码正常；`dialect=pwsh` 时完全复原 |
 
@@ -399,11 +408,11 @@ dsh-terminal-tool/
 
 | ID | 项 | 处理 |
 |---|---|---|
-| D1 | 自动发现结果不写回 profile 配置 | 有意为之：避免插件在钩子路径上改用户 profile；`bashCandidates` 提供等价的手工选择 |
-| D2 | 用官方 settings 自动表单替代「设置→通用→终端工具」自定义行 | 第一方正式路径（`dsh-settings` 只投影 volatile 字段）；阶段二若需要可再加 `settings.general.item` 行 |
+| D1 | 自动发现结果不写回 profile 配置 | ~~有意为之~~ **已改**：用户点「自动发现」时把选中的 `bashPath` 与可用列表 `bashCandidates` 一次性原子写回（一次 `mutate` 两条 op），因为「扫完还得手抄路径」不可用。会话装配路径仍不写配置 |
+| D2 | ~~用官方 settings 自动表单替代「设置→通用→终端工具」自定义行~~ | **该假设错误，已修正**：0.2.1-rc.2 的 `dsh-settings` 只在 Host 侧算 `volatileForm`/`autoGenerate`，全 asar 没有任何 client bundle 消费它渲染页面（`autoGenerate` 的语义只写在协议注释里）。因此设置页不会有任何自动 UI，必须自写 `settings.general.item` 行 —— 已实现于 `src/client/` |
 | V1 | `tools.register` 从 agent 子树注册的落点（本层 vs 全局层） | **已在集成测试中确认落在 agent 自己的层**：`bash` 对该 agent 可见、对祖先 preset scope 不可见；幂等仍靠 `tools.get('bash', agent)` 探测双保险 |
 | V2 | 官方 `tool-bash` 在 `isolate('shell')` 子树里解析 `ctx.shell` | **已由集成测试验证**：同一 agent 子树内的 `tool-bash` 拿到的是 `GitBashExecutor`，命令实际跑在 Git Bash 上（`uname -s` → `MINGW64_NT-…`） |
-| V3 | client 半区设置行 | 阶段二，非本阶段阻塞项 |
+| V3 | client 半区设置行 | **已完成**：`src/client/` 注册 `settings.general.item`（id `terminal-tool`，order 60），含胶囊切换、路径输入/下拉、「自动发现」按钮；两条只读 `/api` 路由由 `src/routes.ts` 提供 |
 
 ### 12.1 编码期发现的、与设计稿的差异（已按实际实现修正）
 

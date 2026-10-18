@@ -1,76 +1,96 @@
 /**
- * The slice of the DSH client-plugin contracts this bundle depends on.
+ * Structural contracts for the client half.
  *
- * The client half is loaded by the Host's `dsh-client-modules` loader, which
- * seeds `require` with the page's shared modules (`react`, `react/jsx-runtime`)
- * and hands `apply()` a cordis client context. The first-party client type graph
- * is not published, so the package keeps structural types of exactly the
- * surface it uses instead of depending on those declarations.
+ * Everything here is *shaped*, not imported: the browser bundle must not import
+ * first-party value modules (the client purity gate forbids cross-plugin value
+ * imports), and typing the cordis services structurally keeps this package
+ * independent of their internal declaration layout. Each interface lists only
+ * what this plugin actually calls.
  */
 
-/** One namespace's settings snapshot as the Host's describe mirror exposes it. */
+/** A snapshot of the settings form, as the first-party `configForms` reports it. */
 export interface FormSnapshot<T> {
-  readonly status: 'loading' | 'ready' | 'error'
+  readonly status: 'loading' | 'ready' | 'unavailable' | 'error'
   readonly value: T | undefined
+  readonly revision: number | undefined
   readonly writable: boolean
-  readonly revision?: number
+}
+
+/** One field operation inside a namespace mutation. */
+export interface FieldOp {
+  readonly op: 'set' | 'unset'
+  readonly path: readonly string[]
+  readonly value?: unknown
 }
 
 /**
- * A form model exposed to a renderer as a selector hook. The slots runtime turns
- * each `hooks` entry into `use<Name>`; the selector receives the store snapshot
- * and must return the part the component renders.
+ * The subset of `ConfigFormController` this row uses.
+ *
+ * `mutate` is what makes an atomic multi-field write possible: choosing a
+ * discovered path persists `bashPath` and `bashCandidates` in one revision, so
+ * a concurrent reader never observes a half-updated pair.
  */
-export type SnapshotHook<T> = (
-  selector: (snapshot: FormSnapshot<T>) => FormSnapshot<T>,
-) => FormSnapshot<T>
-
-/** The `configForms` service's per-entry form: values, writes, and subscription. */
 export interface ConfigFormLike<T> {
   getSnapshot(): FormSnapshot<T>
   subscribe(listener: () => void): () => void
-  /** Queue one field write; resolves to whether the Host accepted it. */
-  set(field: string, value: unknown): Promise<boolean>
+  mutate(ops: readonly FieldOp[], expectedRevision?: number): Promise<boolean>
 }
 
-/** Values this plugin projects into the General settings row. */
+/** Values this plugin stores in its own entry Config. */
 export interface TerminalToolValues {
   readonly dialect?: 'pwsh' | 'bash'
   readonly bashPath?: string
-  readonly autoDiscover?: boolean
+  readonly bashCandidates?: readonly string[]
 }
 
-/** Translation dictionary for one locale. */
+/** A locale dictionary. */
 export type Dictionary = Readonly<Record<string, string>>
 
-/** Options a cell passes when it registers into a slot. */
+/** What `slots.register` accepts (only the keys used here). */
 export interface SlotRegistration {
   readonly name: string
   readonly id: string
-  readonly order: number
-  readonly locale: string
-  readonly inject: () => Record<string, unknown>
+  readonly order?: number
+  readonly locale?: string
+  readonly inject?: () => unknown
+}
+
+/** Translate function bound to this plugin's locale namespace. */
+export type Translate = (key: string, params?: Record<string, string>) => string
+
+/** The face the slot's `inject` hands the row. */
+export interface RowFace {
+  readonly t: Translate
+  readonly form: ConfigFormLike<TerminalToolValues> | undefined
 }
 
 /** Props the slots runtime passes to the row component. */
-export interface RowProps {
-  readonly useSettings: SnapshotHook<TerminalToolValues>
-  readonly set: (field: string, value: unknown) => Promise<boolean>
-  readonly t: (key: string) => string
+export type RowProps = RowFace
+
+/** The subset of `ctx.configForms` used here. */
+export interface ConfigFormsService {
+  get<T>(entryId: string): ConfigFormLike<T>
+  whileServed(namespaces: readonly string[], register: (served: ReadonlySet<string>) => () => void): () => void
 }
 
-/** The client context surface this bundle registers into. */
+/** The subset of `ctx.slots` used here. */
+export interface SlotsService {
+  inject(name: string, callback: () => unknown): unknown
+  register(registration: SlotRegistration, component: (props: RowProps) => unknown): () => void
+}
+
+/** The subset of `ctx.locale` used here. */
+export interface LocaleService {
+  register(namespace: string, dictionaries: Record<string, Dictionary>): () => void
+  bind(namespace: string): Translate
+}
+
+/** The client-side cordis context, structurally. */
 export interface ClientContext {
-  effect(execute: () => (() => void) | void, label?: string): void
-  readonly locale: {
-    register(namespace: string, dictionaries: { en: Dictionary; zh: Dictionary }): () => void
-  }
-  readonly configForms: {
-    get<T>(entryId: string): ConfigFormLike<T>
-    whileServed(namespaces: readonly string[], register: () => (() => void) | void): () => void
-  }
-  readonly slots: {
-    inject(names: string, callback: () => (() => void) | void): void
-    register(options: SlotRegistration, component: (props: RowProps) => unknown): unknown
-  }
+  effect(callback: () => unknown, label?: string): void
+  get(name: string): unknown
+  inject(names: string[], callback: (scoped: ClientContext) => void): void
+  readonly locale?: LocaleService | undefined
+  readonly slots?: SlotsService | undefined
+  readonly configForms?: ConfigFormsService | undefined
 }

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { delimiter, dirname, join, resolve } from 'node:path'
-import { existsSync } from 'node:fs'
+import type { BashCandidate } from './shared/protocol.ts'
 import type { DiscoveredBash, DiscoveryReport, DiscoverySource } from './types.ts'
 import { candidateExecutables, isFile, isWslBash, validateBashPath } from './paths.ts'
 
@@ -103,6 +103,125 @@ function expand(candidate: Candidate): Candidate[] {
 }
 
 /**
+ * Enumerate every candidate a sweep would consider, in priority order.
+ *
+ * Shared by {@link discoverBash} (which stops at the first usable one, because a
+ * session needs exactly one executor) and {@link scanBashCandidates} (which
+ * returns all of them, because the settings row's picker lists every choice).
+ * Keeping one enumeration means the picker can never offer a path the session
+ * would not accept.
+ */
+async function enumerateCandidates(options: {
+  readonly bashPath: string
+  readonly bashCandidates: readonly string[]
+  readonly autoDiscover: boolean
+  readonly timeoutMs: number
+  readonly signal?: AbortSignal
+  /**
+   * Whether a configured `bashPath` ends the sweep.
+   *
+   * True for a session (`discoverBash`): an explicitly configured executable is
+   * the answer, and scanning the machine anyway would be wasted work on every
+   * agent creation. False for the settings row's picker (`scanBashCandidates`):
+   * the user asked to see every Git Bash, so a saved path is just the first
+   * candidate rather than the end of the search.
+   */
+  readonly explicitWins: boolean
+}): Promise<{ ordered: Candidate[]; rejected: { path: string; reason: string }[] }> {
+  const rejected: { path: string; reason: string }[] = []
+  const seen = new Set<string>()
+
+  /** Push a candidate, dropping duplicates and every WSL launcher. */
+  const push = (candidate: Candidate): void => {
+    const key = candidate.path.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    if (isWslBash(candidate.path)) {
+      rejected.push({ path: candidate.path, reason: 'WSL launcher, not Git Bash' })
+      return
+    }
+    ordered.push(candidate)
+  }
+
+  const ordered: Candidate[] = []
+
+  // 1. An explicit executable wins for a session, even when discovery is off.
+  const explicit = options.bashPath.trim()
+  if (explicit !== '') {
+    push({ path: explicit, source: 'configured' })
+  }
+
+  if (options.autoDiscover && !(options.explicitWins && explicit !== '')) {
+    // 2. Explicit candidate list: executables, bin directories or install roots.
+    for (const item of options.bashCandidates) {
+      if (item.trim() === '') continue
+      for (const candidate of expand({ path: item, source: 'candidate' })) push(candidate)
+    }
+
+    const controller = new AbortController()
+    const timer =
+      options.timeoutMs > 0
+        ? setTimeout(() => {
+            controller.abort(new Error('discovery timeout'))
+          }, options.timeoutMs)
+        : undefined
+    const signal =
+      options.signal === undefined ? controller.signal : AbortSignal.any([options.signal, controller.signal])
+
+    try {
+      // 3. Registry-reported Git installation.
+      const registry = await registryInstallPath(signal)
+      if (registry !== undefined && !signal.aborted) {
+        for (const candidate of expand({ path: registry, source: 'registry' })) push(candidate)
+      }
+
+      // 4-6. Conventional locations and PATH.
+      for (const root of environmentRoots()) {
+        for (const candidate of expand(root)) push(candidate)
+      }
+      const fromPath = bashFromGitOnPath()
+      if (fromPath !== undefined) push(fromPath)
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
+  // Only paths that really are a usable bash survive; the rest keep a reason.
+  const usable: Candidate[] = []
+  for (const candidate of ordered) {
+    const verdict = validateBashPath(candidate.path)
+    if (verdict.ok) usable.push(candidate)
+    else rejected.push({ path: candidate.path, reason: verdict.reason })
+  }
+  return { ordered: usable, rejected }
+}
+
+/**
+ * Scan every usable Git Bash on this machine, for the settings row's picker.
+ *
+ * Unlike {@link discoverBash} this never stops at the first hit: the user gets
+ * the full list, ordered by source priority. `saved` is put first so the value
+ * the user already chose stays selectable even when the sweep would rank it
+ * lower.
+ */
+export async function scanBashCandidates(options: {
+  readonly bashPath: string
+  readonly bashCandidates: readonly string[]
+  readonly autoDiscover: boolean
+  readonly timeoutMs: number
+  readonly signal?: AbortSignal
+}): Promise<BashCandidate[]> {
+  const { ordered } = await enumerateCandidates({ ...options, explicitWins: false })
+  const rank = (candidate: Candidate): number => (candidate.source === 'configured' ? 0 : 1)
+  const sorted = [...ordered].sort((left, right) => {
+    const byRank = rank(left) - rank(right)
+    if (byRank !== 0) return byRank
+    return left.path.localeCompare(right.path, 'en')
+  })
+  return sorted.map((candidate) => ({ path: candidate.path, source: candidate.source, valid: true }))
+}
+
+/**
  * Run one discovery sweep.
  *
  * The sweep is bounded by `timeoutMs`; on timeout the candidates considered so
@@ -117,73 +236,9 @@ export async function discoverBash(options: {
   readonly timeoutMs: number
   readonly signal?: AbortSignal
 }): Promise<DiscoveryReport> {
-  const considered: string[] = []
-  const rejected: { path: string; reason: string }[] = []
-
-  const accept = (path: string): boolean => {
-    const verdict = validateBashPath(path)
-    if (verdict.ok) return true
-    if (!considered.includes(path) && verdict.reason !== 'file does not exist') {
-      rejected.push({ path, reason: verdict.reason })
-    }
-    return false
-  }
-
-  // 1. An explicit executable always wins, even when discovery is disabled.
-  const explicit = options.bashPath.trim()
-  if (explicit !== '') {
-    considered.push(explicit)
-    if (accept(explicit)) return { found: { path: explicit, source: 'configured' }, considered, rejected }
-  }
-
-  if (!options.autoDiscover) {
-    if (explicit !== '') rejected.push({ path: explicit, reason: 'configured path is not a usable bash' })
-    return { found: undefined, considered, rejected }
-  }
-
-  const controller = new AbortController()
-  const timer =
-    options.timeoutMs > 0
-      ? setTimeout(() => {
-          controller.abort(new Error('discovery timeout'))
-        }, options.timeoutMs)
-      : undefined
-  const signal = options.signal === undefined ? controller.signal : AbortSignal.any([options.signal, controller.signal])
-
-  try {
-    const ordered: Candidate[] = []
-
-    // 2. Explicit candidate list: executables, bin directories or install roots.
-    for (const item of options.bashCandidates) {
-      if (item.trim() === '') continue
-      ordered.push(...expand({ path: item, source: 'candidate' }))
-    }
-
-    // 3. Registry-reported Git installation.
-    const registry = await registryInstallPath(signal)
-    if (registry !== undefined && !signal.aborted) {
-      ordered.push(...expand({ path: registry, source: 'registry' }))
-    }
-
-    // 4-6. Conventional locations and PATH.
-    for (const root of environmentRoots()) ordered.push(...expand(root))
-    const fromPath = bashFromGitOnPath()
-    if (fromPath !== undefined) ordered.push(fromPath)
-
-    for (const candidate of ordered) {
-      if (signal.aborted) break
-      if (considered.includes(candidate.path)) continue
-      considered.push(candidate.path)
-      if (isWslBash(candidate.path)) {
-        rejected.push({ path: candidate.path, reason: 'WSL launcher, not Git Bash' })
-        continue
-      }
-      if (!existsSync(candidate.path)) continue
-      if (accept(candidate.path)) return { found: { path: candidate.path, source: candidate.source }, considered, rejected }
-    }
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-  }
-
-  return { found: undefined, considered, rejected }
+  const { ordered, rejected } = await enumerateCandidates({ ...options, explicitWins: true })
+  const considered = ordered.map((candidate) => candidate.path)
+  const found = ordered[0]
+  if (found === undefined) return { found: undefined, considered, rejected }
+  return { found: { path: found.path, source: found.source }, considered, rejected }
 }

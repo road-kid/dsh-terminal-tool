@@ -79,6 +79,30 @@ await test('client bundle keeps react external and registers the General row', a
   assert.doesNotMatch(source, /react\.production|react\.development/)
 })
 
+// The row has to look like every other General row: chips for the dialect, a
+// path control and an "Auto-detect" button that scans on click. The class names
+// are the contract with `ROW_CSS`, and the routes are the contract with the
+// host half — if either drifts, the UI silently stops working.
+await test('client bundle ships the terminal-tool row markup and routes', async () => {
+  const source = await readFile(join(root, 'lib', 'client.js'), 'utf8')
+  for (const className of ['tterm-group', 'tterm-title', 'tterm-chip', 'tterm-input', 'tterm-button', 'tterm-note']) {
+    assert.match(source, new RegExp(`["'\`]${className}["'\`]`), `${className} is applied`)
+  }
+  assert.match(source, /row\.discover/)
+  assert.match(source, /row\.path\.missing/)
+  assert.match(source, /row\.newSession/)
+  assert.match(source, /\/api\/dsh-terminal-tool\/state/)
+  assert.match(source, /\/api\/dsh-terminal-tool\/discover/)
+})
+
+await test('host bundle registers both settings-row routes', async () => {
+  const source = await readFile(join(root, 'lib', 'index.js'), 'utf8')
+  assert.match(source, /\/api\/dsh-terminal-tool\/state/)
+  assert.match(source, /\/api\/dsh-terminal-tool\/discover/)
+  assert.match(source, /connection/)
+  assert.match(source, /scanBashCandidates/)
+})
+
 await test('bundle patch inserts exactly one Windows-guarded row', async () => {
   const patch = await readFile(join(root, 'cordis.patch.yml'), 'utf8')
   const inserts = patch.match(/-\s+insert:/g) ?? []

@@ -105,14 +105,35 @@ npm pack
 
 ### 启用
 
-重启后打开 **设置 → 通用**，底部会多出一行 **终端工具**（插件客户端半区注册的 `settings.general.item` 行），在 PowerShell / Git Bash 之间切换：
+重启后打开 **设置 → 通用**，底部会多出一行 **终端工具**（客户端半区注册的 `settings.general.item` 行）：
+
+```
+终端工具
+[PowerShell（pwsh）] [Git Bash（bash）]
+Git Bash 路径  [__________________________]  [自动发现]
+更改对新会话生效（运行中的会话保持启动时的选择）。
+```
+
+- 两枚胶囊按钮切换 `dialect`，**默认 `pwsh`**：装插件本身不改变任何行为。
+- 选 `bash` 后才出现路径行。「自动发现」会扫一遍本机 Git Bash，把可用路径持久化进 `bashCandidates`；候选多于一条时输入框变成下拉。
+- 已经选好的路径**不会**被后续扫描改写（除非它已失效）。
+- 挂载时**不扫描、不写配置**：扫描只在点「自动发现」时发生，`/state` 只读配置。
+
+设置行通过两条只读 `/api` 路由取数（写入仍走 `configForms`，落 profile patch 层）：
+
+| 路由 | 作用 |
+|---|---|
+| `POST /api/dsh-terminal-tool/state` | 平台、设置可用性、当前值、能力探测。**不扫描**，所以打开设置是瞬时的 |
+| `POST /api/dsh-terminal-tool/discover` | 用户点「自动发现」时才调用，返回全部可用候选 |
+
+Config 字段（设置行只暴露前三个；其余仍可直接写 profile patch）：
 
 | 字段 | 说明 |
 |---|---|
 | `dialect` | `pwsh`（默认，行为不变）/ `bash` |
 | `bashPath` | 显式 bash.exe 绝对路径；留空 = 自动发现 |
-| `bashCandidates` | 额外候选（安装根目录或 bash.exe），优先于内置顺序 |
-| `autoDiscover` | `bashPath` 为空时是否自动发现 |
+| `bashCandidates` | 上一次「自动发现」的可用路径（也接受手填的安装根目录） |
+| `autoDiscover` | 会话装配时 `bashPath` 为空是否自动发现 |
 | `discoverTimeoutMs` | 一次发现的上限（只 stat 文件，不 spawn） |
 | `loginShell` | 传 `-l`，读取登录 profile |
 | `extraPath` | 追加到子进程 PATH 的目录 |
@@ -205,15 +226,19 @@ src/executor.ts   GitBashExecutor（继承 LocalBashExecutor，含沙箱分支�
 src/replace.ts    每会话替换 + 逆序回滚
 src/diag.ts       诊断日志
 src/types.ts      共享类型
-src/client/       客户端半区：设置 → 通用 的「终端工具」行
-                  （index.ts 注册 settings.general.item，row.tsx 是行组件）
-src/testing.ts    仅测试用的第二入口（不发布）
+src/shared/protocol.ts  Host/客户端共享的线路协议（路由路径、常量、视图类型）
+src/routes.ts      两条只读 /api 路由：/state 与 /discover
+src/client/        客户端半区：设置 → 通用 的「终端工具」行
+                  index.ts 注册 settings.general.item；row.tsx 是行组件；
+                  store.ts 是状态机（自动发现、写回、错误）；api.ts 取数
+src/testing.ts     仅测试用的第二入口（不发布）
 ```
 
 ```powershell
 npm run typecheck     # tsc --noEmit（devDeps 钉 0.2.1-rc.2 真 .d.ts）
 npm run build         # esbuild → lib/index.js（Host ESM）+ lib/client.js（客户端半区，react 保持 external）
 npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / 客户端半区装载形状 / bundle 未内联第一方
+npm run clientsmoke   # 真实执行 lib/client.js：模块装载形状、apply 注册行、无 configForms 时降级、HMR 幂等
 npm run selftest      # 路径、发现、快照 22 项
 npm run integration   # 在真实第一方服务上跑完整替换流程（5 项）
 ```

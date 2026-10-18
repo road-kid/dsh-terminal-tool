@@ -2,37 +2,39 @@
  * Row styles, injected once per page.
  *
  * The client bundle is served as a single script with no sidecar CSS request, so
- * the sheet travels as a string. Colours derive from `currentColor` (mixed with
- * the page surface) so the row follows the active theme without reading it.
+ * the sheet travels as a string. Every colour is a `--dsw-alias-*` design token:
+ * those are what the surrounding General section uses, so the row follows the
+ * theme (light/dark/system) without reading it, and the chips line up with the
+ * official controls next to them.
  */
 
-export const STYLE_TAG_ID = 'dsh-terminal-tool-row'
+/** Marker attribute used to find (and reuse) the injected sheet after HMR. */
+export const STYLE_TAG_ID = 'dsh-terminal-tool/row.css'
 
 const CSS = `
-.tt-row{display:flex;gap:16px;align-items:flex-start;justify-content:space-between;padding:14px 0}
-.tt-text{flex:1 1 auto;min-width:0}
-.tt-label{font-size:13px;font-weight:600;line-height:1.4}
-.tt-desc{margin-top:2px;font-size:12px;line-height:1.5;opacity:.65}
-.tt-body{display:flex;flex:0 0 auto;flex-direction:column;gap:8px;width:min(320px,100%)}
-.tt-choices{display:flex;gap:6px}
-.tt-choice{flex:1 1 0;padding:6px 10px;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:12px;cursor:pointer}
-.tt-choice[aria-checked="true"]{border-color:transparent;background:color-mix(in srgb,currentColor 14%,transparent);font-weight:600}
-.tt-choice:disabled{opacity:.5;cursor:default}
-.tt-field{display:flex;flex-direction:column;gap:4px}
-.tt-field-label{font-size:12px;opacity:.75}
-.tt-input{box-sizing:border-box;width:100%;padding:6px 8px;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:12px}
-.tt-input:disabled{opacity:.6}
-.tt-hint{margin:0;font-size:11px;line-height:1.5;opacity:.6}
-.tt-check{display:flex;gap:6px;align-items:center;font-size:12px;opacity:.85}
-.tt-error{margin:0;font-size:12px;color:#e5484d}
+.tterm-group{display:flex;flex-direction:column;gap:8px;padding:16px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}
+.tterm-title{color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px}
+.tterm-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tterm-chip{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);border-radius:20px;background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:22px;padding:8px 20px;cursor:pointer}
+.tterm-chip:hover:not(:disabled):not(.tterm-chip-on){background:var(--dsw-alias-interactive-bg-hover)}
+.tterm-chip-on{background:var(--dsw-alias-bg-module-platform);border-color:var(--dsw-static-neutral-bluish-400)}
+.tterm-chip:disabled{opacity:.45;cursor:not-allowed}
+.tterm-input{box-sizing:border-box;flex:1 1 260px;min-width:200px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;padding:6px 10px}
+select.tterm-input{cursor:pointer}
+select.tterm-input:disabled{cursor:not-allowed}
+.tterm-button{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;padding:6px 14px;cursor:pointer}
+.tterm-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.tterm-button:disabled{opacity:.45;cursor:not-allowed}
+.tterm-note{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+.tterm-error{color:var(--dsw-alias-label-error,var(--dsw-alias-label-primary));font-size:12px;line-height:18px}
 `.trim()
 
 /** Inject the stylesheet once; a re-registration after HMR reuses the tag. */
-export function applyStyles(): void {
+export function injectStyles(): void {
   if (typeof document === 'undefined') return
-  if (document.getElementById(STYLE_TAG_ID) !== null) return
+  if (document.querySelector(`style[data-plugin-css="${STYLE_TAG_ID}"]`) !== null) return
   const style = document.createElement('style')
-  style.id = STYLE_TAG_ID
+  style.setAttribute('data-plugin-css', STYLE_TAG_ID)
   style.textContent = CSS
   document.head.append(style)
 }
