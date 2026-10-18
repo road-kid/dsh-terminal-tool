@@ -1,6 +1,6 @@
 {
   "name": "dsh-terminal-tool",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Switch the Windows terminal tool from pwsh to the local Git Bash, without touching presets or the global ctx.shell.",
   "license": "MIT",
@@ -64,7 +64,6 @@
     "contractcheck": "node scripts/contractcheck.mjs",
     "integration": "node scripts/integration.mjs",
     "check": "npm run typecheck && npm run build && npm run contractcheck && npm run selftest && npm run integration",
-    "prepare": "npm run build",
     "prepack": "npm run build"
   },
   "dependencies": {
