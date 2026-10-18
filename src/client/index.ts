@@ -36,8 +36,17 @@ export const GENERAL_ITEM_ORDER = 60
 /** Only hard dependencies: the slot registry and the locale registry. */
 export const inject = ['slots', 'locale']
 
-/** Guards against a second registration after a late service or an HMR re-apply. */
-let seated = false
+/**
+ * Disposer of the currently seated row, if any.
+ *
+ * A late `configForms` upgrades a read-only row into a writable one; that means
+ * replacing the registration. Disposing the previous entry first is what keeps
+ * the slot from holding two rows with the same id.
+ */
+let unseat: (() => void) | undefined
+
+/** The form the seated row was built with, to tell a re-apply from an upgrade. */
+let seatedForm: ConfigFormLike<TerminalToolValues> | undefined
 
 /** Look up a service without making it a hard dependency. */
 function service<T>(ctx: ClientContext, name: string): T | undefined {
@@ -57,16 +66,25 @@ function nativeForm(ctx: ClientContext): ConfigFormLike<TerminalToolValues> | un
 }
 
 /**
- * Register the row, once.
+ * Register the row, replacing any previous registration.
+ *
+ * Re-seating happens when `configForms` shows up after the first apply turned
+ * the row read-only; the old entry must be disposed or the slot would hold two
+ * rows with the same id.
  *
  * @param form - the entry form, or `undefined` for a read-only row.
  */
 function seatRow(ctx: ClientContext, slots: SlotsService, t: Translate, form: ConfigFormLike<TerminalToolValues> | undefined): void {
-  if (seated) return
-  seated = true
+  // Re-applying with the same form (HMR) must not add a second row; only an
+  // actual upgrade — read-only turning writable — replaces it.
+  if (unseat !== undefined && seatedForm === form) return
+  unseat?.()
+  unseat = undefined
+  seatedForm = form
   ctx.effect(() => {
-    slots.inject('settings.general.item', () => {
-      slots.register(
+    let dispose: (() => void) | undefined
+    const off = slots.inject('settings.general.item', () => {
+      dispose = slots.register(
         {
           name: 'settings.general.item',
           id: GENERAL_ITEM_ID,
@@ -76,7 +94,21 @@ function seatRow(ctx: ClientContext, slots: SlotsService, t: Translate, form: Co
         },
         TerminalToolRow,
       )
+      unseat = () => {
+        const current = dispose
+        dispose = undefined
+        unseat = undefined
+        current?.()
+      }
     })
+    return () => {
+      unseat = undefined
+      seatedForm = undefined
+      const current = dispose
+      dispose = undefined
+      current?.()
+      off()
+    }
   }, 'terminal-tool: settings row')
 }
 
@@ -106,7 +138,6 @@ export function apply(ctx: ClientContext): void {
     ctx.inject(['configForms'], (scoped) => {
       const late = nativeForm(scoped)
       if (late === undefined) return
-      seated = false
       seatRow(scoped, slots, t, late)
     })
   }

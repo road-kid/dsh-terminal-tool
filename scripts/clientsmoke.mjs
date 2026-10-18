@@ -159,6 +159,42 @@ await test('a Host without configForms still seats a read-only row', () => {
   assert.equal(calls.registered[0].registration.inject().form, undefined)
 })
 
+await test('a late configForms replaces the read-only row instead of stacking', () => {
+  // The stub's ctx.inject runs the callback immediately, which is exactly the
+  // late-service path: the first apply seats a row with no form, the deferred
+  // injection seats one with it. Only one row may survive.
+  const { ctx, calls, form } = stubContext({ withForms: false })
+  let disposed = 0
+  // `configForms` only becomes visible after the first apply has run, which is
+  // what the deferred `ctx.inject` path exists for.
+  let formsReady = false
+  const registered = calls.registered
+  ctx.get = (name) => {
+    if (name === 'slots') {
+      return {
+        inject: (slot, callback) => callback(),
+        register(registration, component) {
+          registered.push({ registration, component })
+          return () => {
+            disposed += 1
+          }
+        },
+      }
+    }
+    if (name === 'locale') return undefined
+    if (name === 'configForms') return formsReady ? { get: () => form } : undefined
+    return undefined
+  }
+  ctx.effect = (callback) => {
+    callback()
+    formsReady = true
+  }
+  loadBundle().exports.apply(ctx)
+  assert.equal(registered.length, 2, 'the read-only row is replaced by a writable one')
+  assert.equal(disposed, 1, 'the read-only row is disposed first')
+  assert.equal(registered[1].registration.inject().form, form)
+})
+
 await test('apply is idempotent across a re-run (HMR)', () => {
   const { ctx, calls } = stubContext()
   const { exports } = loadBundle()

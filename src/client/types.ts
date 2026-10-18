@@ -75,7 +75,7 @@ export interface ConfigFormsService {
 
 /** The subset of `ctx.slots` used here. */
 export interface SlotsService {
-  inject(name: string, callback: () => unknown): unknown
+  inject(name: string, callback: () => unknown): () => void
   register(registration: SlotRegistration, component: (props: RowProps) => unknown): () => void
 }
 
