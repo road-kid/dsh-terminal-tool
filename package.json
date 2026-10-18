@@ -72,10 +72,11 @@
     "selftest": "node scripts/selftest.mjs",
     "contractcheck": "node scripts/contractcheck.mjs",
     "integration": "node scripts/integration.mjs",
-    "check": "npm run typecheck && npm run build && npm run contractcheck && npm run clientsmoke && npm run selftest && npm run rowselftest && npm run integration",
+    "check": "npm run typecheck && npm run build && npm run contractcheck && npm run clientsmoke && npm run selftest && npm run rowselftest && npm run rendertest && npm run integration",
     "prepack": "npm run build",
     "clientsmoke": "node scripts/clientsmoke.mjs",
-    "rowselftest": "node scripts/rowselftest.mjs"
+    "rowselftest": "node scripts/rowselftest.mjs",
+    "rendertest": "node scripts/rendertest.mjs"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "~3.18.4"
@@ -107,7 +108,11 @@
     "@deepseek-ai/dsh-working-directory": "0.2.1-rc.2",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.1",
     "esbuild": "^0.25.0",
+    "jsdom": "^25.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "typescript": "^5.6.3"
   },
   "pnpm": {
