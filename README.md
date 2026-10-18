@@ -55,7 +55,7 @@ DSH 0.2.1-rc.2 的平台组合在 Windows 上是互斥的：
    ```
    四步都登记在 `agentCtx` 上，会话结束由 cordis 逆序释放；中途失败则逆序回滚，会话退化为原样。
 
-4. **配置**：所有字段 `.volatile()`，因此直接出现在 **设置 → 通用** 的表单里（`dsh-settings` 只投影 volatile 字段），不需要自建 HTTP 路由或客户端设置行。
+4. **配置**：所有字段 `.volatile()`，Host 侧由 `dsh-settings` 投影成可写 namespace；**客户端半区**（`lib/client.js`）再用官方 `configForms` 服务把同一份值渲染成 **设置 → 通用 → 终端工具** 的一行，写回仍落在 profile 的 patch 层。不加客户端半区时，Host 侧值虽然可写，但设置页里没有任何 UI 入口。
 
 ### 关键设计约束（为什么不那么做）
 
@@ -105,7 +105,7 @@ npm pack
 
 ### 启用
 
-重启后打开 **设置 → 通用 → 终端工具**：
+重启后打开 **设置 → 通用**，底部会多出一行 **终端工具**（插件客户端半区注册的 `settings.general.item` 行），在 PowerShell / Git Bash 之间切换：
 
 | 字段 | 说明 |
 |---|---|
@@ -205,13 +205,15 @@ src/executor.ts   GitBashExecutor（继承 LocalBashExecutor，含沙箱分支�
 src/replace.ts    每会话替换 + 逆序回滚
 src/diag.ts       诊断日志
 src/types.ts      共享类型
+src/client/       客户端半区：设置 → 通用 的「终端工具」行
+                  （index.ts 注册 settings.general.item，row.tsx 是行组件）
 src/testing.ts    仅测试用的第二入口（不发布）
 ```
 
 ```powershell
 npm run typecheck     # tsc --noEmit（devDeps 钉 0.2.1-rc.2 真 .d.ts）
-npm run build         # esbuild → lib/（第一方包保持 external）
-npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / bundle 未内联第一方
+npm run build         # esbuild → lib/index.js（Host ESM）+ lib/client.js（客户端半区，react 保持 external）
+npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / 客户端半区装载形状 / bundle 未内联第一方
 npm run selftest      # 路径、发现、快照 22 项
 npm run integration   # 在真实第一方服务上跑完整替换流程（5 项）
 ```

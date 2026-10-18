@@ -1,6 +1,6 @@
 {
   "name": "dsh-terminal-tool",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "description": "Switch the Windows terminal tool from pwsh to the local Git Bash, without touching presets or the global ctx.shell.",
   "license": "MIT",
@@ -40,11 +40,17 @@
     "./locale/*.json": "./locale/*.json",
     "./icon": "./assets/icon.svg",
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    }
   },
   "files": [
     "lib/index.js",
     "lib/index.js.map",
+    "lib/client.js",
+    "lib/client.js.map",
     "lib/types",
     "locale",
     "assets",
@@ -55,6 +61,9 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
     }
   },
   "scripts": {
@@ -95,6 +104,7 @@
     "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
     "@deepseek-ai/dsh-working-directory": "0.2.1-rc.2",
     "@types/node": "^22.10.2",
+    "@types/react": "^18.3.31",
     "esbuild": "^0.25.0",
     "typescript": "^5.6.3"
   },

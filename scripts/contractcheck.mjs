@@ -38,7 +38,7 @@ await test('package declares the dsh bundle patch', () => {
 })
 
 await test('every file referenced by the manifest exists', async () => {
-  for (const file of ['lib/index.js', 'lib/types/index.d.ts', 'cordis.patch.yml', 'locale/en.json', 'locale/zh.json', 'assets/icon.svg']) {
+  for (const file of ['lib/index.js', 'lib/types/index.d.ts', 'lib/client.js', 'lib/types/client/index.d.ts', 'cordis.patch.yml', 'locale/en.json', 'locale/zh.json', 'assets/icon.svg']) {
     await access(join(root, file))
   }
 })
@@ -46,9 +46,37 @@ await test('every file referenced by the manifest exists', async () => {
 await test('exports expose the plugin entry, locale, icon and patch', () => {
   assert.equal(pkg.exports['.'].default, './lib/index.js')
   assert.equal(pkg.exports['.'].types, './lib/types/index.d.ts')
+  assert.equal(pkg.exports['./client'].default, './lib/client.js')
+  assert.equal(pkg.exports['./client'].types, './lib/types/client/index.d.ts')
   assert.equal(pkg.exports['./icon'], './assets/icon.svg')
   assert.equal(pkg.exports['./cordis.patch.yml'], './cordis.patch.yml')
   assert.equal(pkg.exports['./locale/*.json'], './locale/*.json')
+})
+
+await test('manifest declares the Web client half the loader scans for', () => {
+  assert.equal(pkg.dsh?.client?.platform, 'web')
+  for (const file of ['lib/client.js', 'lib/client.js.map']) {
+    assert.ok(pkg.files.includes(file), `${file} must ship`)
+  }
+})
+
+// `dsh-client-modules` refuses to activate a package that declares `dsh.client`
+// but exports no `./client` bundle, and the served script must register itself
+// with the page loader — a plain ESM/CJS bundle would load and do nothing.
+await test('client bundle has the module-loader script shape', async () => {
+  const source = await readFile(join(root, 'lib', 'client.js'), 'utf8')
+  assert.match(source, /^window\.__ModuleLoader__\.load\(\{ id: "dsh-terminal-tool", factory: \(require\) => \{/)
+  assert.match(source, /return module\.exports; \} \}\);?\s*(\/\/# sourceMappingURL=.*)?$/m)
+})
+
+await test('client bundle keeps react external and registers the General row', async () => {
+  const source = await readFile(join(root, 'lib', 'client.js'), 'utf8')
+  assert.match(source, /require\("react"\)/)
+  assert.match(source, /require\("react\/jsx-runtime"\)/)
+  assert.match(source, /settings\.general\.item/)
+  assert.match(source, /configForms/)
+  // A bundled React would duplicate the page's hook dispatcher.
+  assert.doesNotMatch(source, /react\.production|react\.development/)
 })
 
 await test('bundle patch inserts exactly one Windows-guarded row', async () => {

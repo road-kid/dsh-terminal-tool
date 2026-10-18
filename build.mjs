@@ -65,6 +65,41 @@ await build({
   legalComments: 'none',
 })
 
+// Client half: served to the Web renderer by `dsh-client-modules`, which loads
+// it as one classic script and expects the `window.__ModuleLoader__.load` shape.
+// `react` and its JSX runtime stay external: the page seeds them, and a second
+// copy of React inside this bundle would break hook identity.
+await build({
+  entryPoints: [join(root, 'src', 'client', 'index.ts')],
+  outfile: join(outdir, 'client.js'),
+  bundle: true,
+  format: 'cjs',
+  platform: 'browser',
+  target: 'es2022',
+  jsx: 'automatic',
+  sourcemap: true,
+  external: ['react', 'react/jsx-runtime'],
+  banner: {
+    js: 'window.__ModuleLoader__.load({ id: "dsh-terminal-tool", factory: (require) => {\nvar module = { exports: {} }; var exports = module.exports;',
+  },
+  footer: { js: 'return module.exports; } });' },
+  logLevel: 'warning',
+  legalComments: 'none',
+})
+
+await mkdir(join(outdir, 'types', 'client'), { recursive: true })
+
+// The client declaration only needs the shape the loader calls; nothing imports
+// the row component from another package.
+await writeFile(
+  join(outdir, 'types', 'client', 'index.d.ts'),
+  `export declare const name = 'terminal-tool'
+export declare const inject: string[]
+export declare function apply(ctx: unknown): void
+`,
+  'utf8',
+)
+
 // A declaration file that mirrors the public surface without a compiler pass.
 // The import chain is inlined on purpose: `lib/` ships no `.ts` sources, so a
 // `from './config.ts'` re-export would dangle for consumers resolving types.
