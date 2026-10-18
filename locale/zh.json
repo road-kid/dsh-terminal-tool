@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "终端工具",
+    "description": "让模型的终端工具使用本机 Git Bash 而不是 PowerShell。为新会话挂载由真实 Git Bash 支持的 bash 工具、移除该会话的 pwsh，并且不改动任何 preset。"
+  }
+}

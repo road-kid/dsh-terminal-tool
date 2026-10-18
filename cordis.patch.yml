@@ -1,0 +1,12 @@
+# Register the Git Bash terminal tool for this profile.
+#
+# The plugin only does anything on Windows with `dialect: bash`; on every other
+# platform the row is disabled so the composition stays identical to stock.
+#
+# Installing this row does NOT change any session by itself: `dialect` defaults
+# to `pwsh`, which leaves every session on the platform's own terminal tool.
+# The switch lives in Settings (General) because every Config field is volatile.
+- insert:
+    - id: terminal-tool
+      name: dsh-terminal-tool
+      disabled: !!js process.platform !== 'win32'

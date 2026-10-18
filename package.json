@@ -1,0 +1,109 @@
+{
+  "name": "dsh-terminal-tool",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Switch the Windows terminal tool from pwsh to the local Git Bash, without touching presets or the global ctx.shell.",
+  "license": "MIT",
+  "author": {
+    "name": "liang",
+    "url": "https://github.com/road-kid"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/road-kid/dsh-terminal-tool.git"
+  },
+  "homepage": "https://github.com/road-kid/dsh-terminal-tool#readme",
+  "bugs": {
+    "url": "https://github.com/road-kid/dsh-terminal-tool/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "bash",
+    "git-bash",
+    "terminal",
+    "windows"
+  ],
+  "icon": "./assets/icon.svg",
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.0 <0.3.0"
+  },
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./assets/icon.svg",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/index.js.map",
+    "lib/types",
+    "locale",
+    "assets",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "selftest": "node scripts/selftest.mjs",
+    "contractcheck": "node scripts/contractcheck.mjs",
+    "integration": "node scripts/integration.mjs",
+    "check": "npm run typecheck && npm run build && npm run contractcheck && npm run selftest && npm run integration",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-bash-local": ">=0.2.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-sandbox": ">=0.2.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-shell": ">=0.2.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.2.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-tool-bash": ">=0.2.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/dsh-agent": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-bash-local": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-jobs": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-pwsh-local": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-sandbox": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sandbox-local": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-sandbox-policy": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session-projection": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-shell": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-subprocess-local": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tool-bash": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tool-pwsh": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-working-directory": "0.2.1-rc.2",
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}
