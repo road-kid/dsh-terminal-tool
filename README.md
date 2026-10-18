@@ -238,9 +238,12 @@ src/testing.ts     仅测试用的第二入口（不发布）
 npm run typecheck     # tsc --noEmit（devDeps 钉 0.2.1-rc.2 真 .d.ts）
 npm run build         # esbuild → lib/index.js（Host ESM）+ lib/client.js（客户端半区，react 保持 external）
 npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / 客户端半区装载形状 / bundle 未内联第一方
-npm run clientsmoke   # 真实执行 lib/client.js：模块装载形状、apply 注册行、无 configForms 时降级、HMR 幂等
-npm run selftest      # 路径、发现、快照 22 项
+npm run clientsmoke   # 真实执行 lib/client.js：模块装载形状、apply 注册行、无 configForms 时降级、HMR 幂等（7 项）
+npm run rowselftest   # 行状态机 13 项：/state 读取、乐观写入、自动发现持久化、各类失败提示
+npm run rendertest    # 在 jsdom 里真实渲染并点击：标题/胶囊/路径行/自动发现变下拉（9 项）
+npm run selftest      # 路径、发现、快照 26 项
 npm run integration   # 在真实第一方服务上跑完整替换流程（5 项）
+npm run check         # 以上全部，一条命令
 ```
 
 设计文档见 [`docs/DESIGN.md`](docs/DESIGN.md)：能力清单、模块划分、决策理由、偏离项与待验证项。
