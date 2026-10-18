@@ -64,6 +64,7 @@
     "contractcheck": "node scripts/contractcheck.mjs",
     "integration": "node scripts/integration.mjs",
     "check": "npm run typecheck && npm run build && npm run contractcheck && npm run selftest && npm run integration",
+    "prepare": "npm run build",
     "prepack": "npm run build"
   },
   "dependencies": {
