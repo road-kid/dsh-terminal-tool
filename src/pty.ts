@@ -35,8 +35,12 @@ const DEFAULT_BACKEND_TYPE = 'gitbash'
 
 export const name = 'terminal-tool-pty'
 
-/** Mirrors the official backend's dependencies plus the registry we add to. */
-export const inject = ['terminals', 'subprocess', 'sandboxPolicy']
+/**
+ * Exactly the official backend's dependencies: `BashTerminalBackend` reads
+ * `sessionProjections` (sandbox-mode fence) and `workingDirectory` (default
+ * cwd) off its own ctx, so omitting either fails only at spawn time.
+ */
+export const inject = ['terminals', 'sandboxPolicy', 'sessionProjections', 'subprocess', 'workingDirectory']
 
 export const Config = z.object({
   /** Type this backend registers under; preset rows must use the same value. */
@@ -138,11 +142,13 @@ function messageOf(error: unknown): string {
 
 export async function apply(ctx: Context, config: PtyConfig): Promise<void> {
   const resolved = resolveBackendConfig(config)
-  const policy = ctx.get('sandboxPolicy') as SandboxPolicyLike | undefined
   const choice = config.confinedPolicy
 
   try {
     const backend = new BashTerminalBackend(ctx, resolved, async (spec: SubprocessTerminalSpawnSpec) => {
+      // Read the policy per spawn rather than once: the service may be provided
+      // by a later row, and its default mode is user-editable at runtime.
+      const policy = ctx.get('sandboxPolicy') as SandboxPolicyLike | undefined
       const plan = planLaunch({
         hasSandbox: policy !== undefined,
         policyMode: policy?.defaultMode,

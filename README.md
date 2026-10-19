@@ -86,7 +86,7 @@ DSH 0.2.1-rc.2 的平台组合在 Windows 上是互斥的：
 git clone https://github.com/road-kid/dsh-terminal-tool.git
 cd dsh-terminal-tool
 npm install
-npm run check        # typecheck → build → contractcheck → clientsmoke → selftest → rowselftest → rendertest → integration
+npm run check        # typecheck → build → contractcheck → clientsmoke → selftest → rowselftest → rendertest → integration → ptytests
 
 # 2. 装进 profile（本机 profile 为 desktop）
 #    用插件管理器从本地目录安装：
@@ -343,13 +343,14 @@ src/testing.ts     仅测试用的第二入口（不发布）
 ```powershell
 npm run typecheck     # tsc --noEmit（devDeps 钉 0.2.1-rc.2 真 .d.ts，含官方 UI atoms 类型）
 npm run build         # esbuild → lib/index.js（Host ESM）+ lib/client.js（客户端半区）+ lib/pty.js（持久终端入口）；react、官方 UI atoms 与 dsh-terminal-bash 均保持 external
-npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / 客户端半区装载形状 / bundle 未内联第一方 / atom specifier 保持 external（17 项）
+npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / 客户端半区装载形状 / bundle 未内联第一方 / atom specifier 保持 external（18 项）
 npm run clientsmoke   # 真实执行 lib/client.js：模块装载形状、react 与 atom external、apply 注册行、无 configForms 时降级、迟到服务替换、HMR 幂等（8 项）
 npm run rowselftest   # 行状态机 15 项：/state 读取、乐观写入、自动发现持久化、各类失败提示
 npm run rendertest    # 在 jsdom 里真实渲染并点击：按 role/aria 断言下拉触发器、菜单项与路径 Input（14 项；官方 atoms 由 scripts/primitives-double.mjs 顶替）
 npm run selftest      # 路径、发现、快照、受限启动决策、/api 路由注册、预设行克隆与变体生命周期 51 项
 npm run integration   # 在真实第一方服务上跑完整替换流程（13 项）
-npm run check         # typecheck → build → contractcheck → clientsmoke → selftest → rowselftest → rendertest → integration
+npm run ptytests      # 在真实 ConPTY 上跑持久 Git Bash：注册、跨命令保持状态、fail/escalate 拒绝（4 项，非 Windows 跳过）
+npm run check         # typecheck → build → contractcheck → clientsmoke → selftest → rowselftest → rendertest → integration → ptytests
 ```
 
 设计文档见 [`docs/DESIGN.md`](docs/DESIGN.md)：能力清单、模块划分、决策理由、偏离项与待验证项。

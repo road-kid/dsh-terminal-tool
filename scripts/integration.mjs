@@ -34,10 +34,12 @@ import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as ShellEnv from '@deepseek-ai/dsh-shell-env'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import TerminalService from '@deepseek-ai/dsh-terminal'
 
 import { SandboxProvider } from '@deepseek-ai/dsh-sandbox'
 import { apply, installResultFor } from '../lib/index.js'
 import { GitBashExecutor, installSession, snapshotConfig } from '../lib/testing.js'
+import * as ptyEntry from '../lib/pty.js'
 
 let passed = 0
 let failed = 0

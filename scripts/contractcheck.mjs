@@ -241,6 +241,12 @@ await test('the pty entry point is published and kept external', async () => {
   assert.doesNotMatch(host, /@deepseek-ai\/dsh-terminal-bash/)
 })
 
+// The pty entry has its own real-machine suite; it must stay wired into
+// `npm run check`, or the backend could rot without any other test noticing.
+await test('the pty suite runs as part of check', async () => {
+  assert.equal(pkg.scripts.ptytests, 'node scripts/ptytests.mjs')
+  assert.match(pkg.scripts.check, /npm run ptytests/)
+})
 await test('the host bundle ships the minimal-mode variant machinery', async () => {
   const source = await readFile(join(root, 'lib', 'index.js'), 'utf8')
   assert.match(source, /minimal-gitbash/)

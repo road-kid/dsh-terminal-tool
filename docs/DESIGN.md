@@ -481,11 +481,12 @@ Git Bash 的 `git`/`ls`/`grep` 需要 `Git\bin`、`Git\usr\bin`、以及 `ucrt64
 | 类型 | `tsc --noEmit`（devDeps 钉 `@deepseek-ai/*@0.2.1-rc.2` 的真实 `.d.ts`） | 0 error |
 | 纯逻辑单测 | `node scripts/selftest.mjs` | 发现顺序、WSL 排除、路径校验、PATH 去重、env 组装、受限策略快照与 `planLaunch` 决策、MSYS 启动失败签名、`/state` 与 `/discover` 的 handler（含 `minimalMode` / `variant` 字段）、两条路由的注册与降级、预设行克隆与变体生命周期（51 项） |
 | 执行器 | `scripts/integration.mjs` 在真实 `tool-bash` 下起真 Git Bash | `echo "$BASH_VERSION"` / `uname -s` → `MINGW64_NT-…` |
-| 契约 | `node scripts/contractcheck.mjs` | Config 字段全 volatile；patch 行 id/name/disabled 正确；导出面完整；客户端 bundle 装载形状；bundle 未内联第一方；`react` 与官方 atoms specifier 保持 external；`./pty` 入口与可选 peer（17 项） |
+| 契约 | `node scripts/contractcheck.mjs` | Config 字段全 volatile；patch 行 id/name/disabled 正确；导出面完整；客户端 bundle 装载形状；bundle 未内联第一方；`react` 与官方 atoms specifier 保持 external；`./pty` 入口与可选 peer（18 项） |
 | 客户端半区 | `node scripts/clientsmoke.mjs` | 真实执行 `lib/client.js`：模块 id、`react` 与官方 UI atoms external、`inject` 面、`apply` 注册 `settings.general.item`、无 `configForms` 时降级为只读、迟到 `configForms` 替换而非叠加、重复 `apply` 幂等（8 项） |
 | 行状态机 | `node scripts/rowselftest.mjs` | `/state` 读入、平台决定显隐、乐观写入、受限策略同步与写入、revision 冲突与抛错提示、自动发现持久化候选、发现为空（15 项） |
-| 行渲染 | `node scripts/rendertest.mjs` | jsdom + React 18 真实渲染 `lib/client.js` 导出的组件，按 role/aria 断言：标题与描述、方言下拉触发器（`button[aria-haspopup="menu"]`）、`role="menuitem"`、选 bash 出路径行、受限策略下拉与切换写回、路径 `input[aria-label="Git Bash 路径"]`、Enter 提交、自动发现变下拉、发现为空、非 Windows 不渲染、只读禁用（12 项）。官方 atoms 由行为级替身 `scripts/primitives-double.mjs` 提供，断言不依赖 CSS 类名 |
+| 行渲染 | `node scripts/rendertest.mjs` | jsdom + React 18 真实渲染 `lib/client.js` 导出的组件，按 role/aria 断言：标题与描述、方言下拉触发器（`button[aria-haspopup="menu"]`）、`role="menuitem"`、选 bash 出路径行、受限策略下拉与切换写回、路径 `input[aria-label="Git Bash 路径"]`、Enter 提交、自动发现变下拉、发现为空、非 Windows 不渲染、只读禁用、极简模式三项菜单与写回、变体三态提示（14 项）。官方 atoms 由行为级替身 `scripts/primitives-double.mjs` 提供，断言不依赖 CSS 类名 |
 | 集成 | `node scripts/integration.mjs`：真实 `dsh-tools` / `dsh-system-prompt` / `dsh-tool-bash` / `dsh-scope` 挂在一次性 cordis 应用里 | `bash` 出现且 `pwsh` 消失、祖先 scope 仍见 `pwsh`、prompt 段被清空、真命令跑在 Git Bash 上、二次 install 幂等、`dialect=pwsh` 完全不替换、`unconfined` 不调用 `confine` 且结果报 `danger-full-access`、`escalate` 的 MSYS 崩溃标 `denied`、`sandboxMode` 在会绕过时隐藏、`apply()` 接线 `agent/created`+`agent/disposed`、四种预设下的 `minimalMode` 分流（13 项） |
+| 持久终端 | `node scripts/ptytests.mjs`：真实 `dsh-subprocess-local` / `dsh-sandbox-local` / `dsh-sandbox-policy` / `dsh-terminal` 上加载 `./pty` 入口 | 只注册一个 `gitbash` 后端、`unconfined` 在 ConPTY 里起 Git Bash 且 `export` 跨两次发送存活、`fail` 抛 `SANDBOX_UNAVAILABLE` 不静默直启、`escalate` 撞上 MSYS 启动失败而非回退（4 项，非 Windows/无 Git Bash 跳过） |
 | 人工 | 装进 profile + 重启 + 新会话 | 模型工具目录只有 `bash`；卡片与退出码正常；`dialect=pwsh` 时完全复原 |
 
 ---
@@ -509,6 +510,7 @@ dsh-terminal-tool/
 ├── scripts/rendertest.mjs
 ├── scripts/primitives-double.mjs  # 官方 UI atoms 的行为级测试替身
 ├── scripts/integration.mjs
+├── scripts/ptytests.mjs
 ├── docs/DESIGN.md        # 本文档
 └── README.md             # 安装/使用/排障/已知限制
 ```
