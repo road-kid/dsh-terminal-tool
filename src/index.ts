@@ -56,19 +56,19 @@ function visible(ctx: Context, name: string): boolean {
 /**
  * Can this deployment switch the terminal tool at all?
  *
- * All three services are required for a real replacement: `tools` to add the
- * `bash` tool and remove `pwsh`, `systemPrompt` to drop the pwsh guidance
- * section, and `settings` to persist the choice. Reporting *which* one is
- * missing is what makes a silent no-op diagnosable.
+ * The replacement itself needs `tools` (to add `bash` and hide `pwsh`) and
+ * `systemPrompt` (to drop the pwsh guidance section); those two decide whether
+ * `installSession` can succeed, so they decide `supported`. `settings` is not
+ * part of that question: without it the mounted session still gets Git Bash, the
+ * choice just cannot be persisted from the settings row (the row reports that on
+ * its own as `settingsAvailable: false`). Reporting *which* service is missing
+ * is what keeps a silent no-op diagnosable.
  */
 export function probeCapability(ctx: Context): CapabilityView {
   if (process.platform !== 'win32') return { supported: false, reason: '仅 Windows 支持切换终端工具' }
   if (!visible(ctx, 'tools')) return { supported: false, reason: '当前 DSH 版本不提供 ctx.tools（无法隐藏 pwsh）' }
   if (!visible(ctx, 'systemPrompt')) {
     return { supported: false, reason: '当前 DSH 版本不提供 ctx.systemPrompt（无法压掉 pwsh 提示词）' }
-  }
-  if (!visible(ctx, 'settings')) {
-    return { supported: false, reason: '当前 DSH 版本不提供 ctx.settings（无法保存选择）' }
   }
   return { supported: true }
 }

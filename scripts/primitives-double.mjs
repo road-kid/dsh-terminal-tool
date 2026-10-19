@@ -15,8 +15,10 @@
  *   that receives every other prop.
  * - `Button` renders a native `<button>` and forwards its attributes.
  * - `Menu` renders the anchor in place and, while `open`, a `role="menu"` card
- *   whose rows carry `role="menuitem"`; activating a row calls `onSelect(id)` and
- *   then `onClose()` (the real menu unmounts its rows on selection).
+ *   whose rows carry `role="menuitem"`. The selected row is drawn with a leading
+ *   check icon (the real `MenuItemButton` has no `aria-selected`), activating a
+ *   row calls only `onSelect(id)` (the owner closes the menu, not the primitive),
+ *   and `portal` renders the card into `document.body` like the real menu does.
  */
 
 /**
@@ -25,8 +27,14 @@
  * @param React - the React instance the bundle uses, so elements share one
  *   runtime (hook identity and `act` both depend on it).
  */
+import { createRequire } from 'node:module'
+
+/** `react-dom` is CJS-only here; the loader's `require` is emulated through Node. */
+const require = createRequire(import.meta.url)
+
 export function primitivesStub(React) {
   const h = React.createElement
+  const ReactDOM = require('react-dom')
 
   /** Official `Button`. */
   function Button({ variant = 'ghost', size = 'md', icon, children, ...rest }) {
@@ -39,33 +47,31 @@ export function primitivesStub(React) {
   }
 
   /** Official `Menu`. */
-  function Menu({ open, anchor, items = [], selectedId, onSelect, onClose, className }) {
+  function Menu({ open, anchor, items = [], selectedId, onSelect, className, portal }) {
+    const card = open
+      ? h(
+          'div',
+          { role: 'menu' },
+          items.map((item) =>
+            h(
+              'button',
+              {
+                key: item.id,
+                type: 'button',
+                role: 'menuitem',
+                onClick: () => onSelect?.(item.id),
+              },
+              item.id === selectedId ? h('svg', { key: 'check', 'aria-hidden': 'true', 'data-check': '' }) : null,
+              item.label,
+            ),
+          ),
+        )
+      : null
     return h(
       'span',
       { className, 'data-menu-anchor': '' },
       anchor,
-      open
-        ? h(
-            'div',
-            { role: 'menu' },
-            items.map((item) =>
-              h(
-                'button',
-                {
-                  key: item.id,
-                  type: 'button',
-                  role: 'menuitem',
-                  'aria-selected': item.id === selectedId ? 'true' : 'false',
-                  onClick: () => {
-                    onSelect?.(item.id)
-                    onClose?.()
-                  },
-                },
-                item.label,
-              ),
-            ),
-          )
-        : null,
+      card !== null && portal === true ? ReactDOM.createPortal(card, document.body) : card,
     )
   }
 

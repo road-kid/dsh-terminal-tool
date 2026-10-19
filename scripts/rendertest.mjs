@@ -212,10 +212,13 @@ async function render(Component, props) {
     trigger: (name) => host.querySelector(`button[aria-haspopup="menu"][aria-label="${name}"]`),
     /** Every dropdown trigger in the row. */
     triggers: () => [...host.querySelectorAll('button[aria-haspopup="menu"]')],
-    /** The open menu card, if any. */
-    menu: () => host.querySelector('[role="menu"]'),
+    /**
+     * The open menu card, if any. The real `Menu` portals it to `document.body`,
+     * so it is deliberately *not* looked up inside the row's host.
+     */
+    menu: () => document.querySelector('[role="menu"]'),
     /** The rows of the open menu. */
-    menuItems: () => [...host.querySelectorAll('[role="menu"] [role="menuitem"]')],
+    menuItems: () => [...document.querySelectorAll('[role="menu"] [role="menuitem"]')],
     root,
     async unmount() {
       await act(async () => {
@@ -236,6 +239,20 @@ async function click(node) {
 }
 
 // --- tests -----------------------------------------------------------------
+
+await test('the stylesheet is claimed while the module materializes', async () => {
+  for (const node of [...document.head.querySelectorAll('style[data-plugin]')]) node.remove()
+  loadBundle()
+  const sheet = document.head.querySelector('style[data-plugin="dsh-terminal-tool"]')
+  assert.ok(sheet, 'a sheet is injected as the module materializes')
+  // `data-plugin` is what the loader removes on disable; `data-plugin-css` is
+  // this module's own marker for reusing the tag across reloads.
+  assert.equal(sheet.getAttribute('data-plugin-css'), 'dsh-terminal-tool/row.css')
+  assert.match(sheet.textContent ?? '', /\.tterm-group\{/)
+  // A reload reuses the owned tag instead of stacking a second sheet.
+  loadBundle()
+  assert.equal(document.head.querySelectorAll('style[data-plugin="dsh-terminal-tool"]').length, 1)
+})
 
 await test('the row ships the title, one sentence of description and the dialect dropdown', async () => {
   const form = formStub({ dialect: 'pwsh', bashPath: '', bashCandidates: [] })
@@ -268,10 +285,14 @@ await test('the dialect menu lists both kinds and marks the current one', async 
       view.menuItems().map((item) => item.textContent),
       ['PowerShell（pwsh）', 'Git Bash（bash）'],
     )
+    // Selected rows are drawn with a leading check icon; the real primitive has
+    // no `aria-selected` attribute to assert on.
     assert.deepEqual(
-      view.menuItems().map((item) => item.getAttribute('aria-selected')),
-      ['true', 'false'],
+      view.menuItems().map((item) => item.querySelector('[data-check]') !== null),
+      [true, false],
     )
+    // The card is portaled out of the row, like the real `Menu`.
+    assert.equal(view.host.querySelector('[role="menu"]'), null)
   } finally {
     await view.unmount()
   }
@@ -304,7 +325,7 @@ await test('the bash row shows the confined-sandbox choice, the pwsh row does no
     assert.match(text, /受限沙箱时/)
     assert.match(
       text,
-      /Windows 沙箱会把命令降到低完整性，Git Bash 无法在其中启动；这里决定怎么处理。/,
+      /Windows 沙箱会把命令降到低完整性，Git Bash 无法在其中启动；这里决定此时怎么办。/,
     )
     // The default choice is to run directly, and the row says what that costs.
     assert.match(view.trigger('受限沙箱时').textContent ?? '', /直接启动（不经沙箱）/)
@@ -335,11 +356,11 @@ await test('choosing a confined policy writes it', async () => {
     await click(view.trigger('受限沙箱时'))
     assert.deepEqual(
       view.menuItems().map((item) => item.textContent),
-      ['直接启动（不经沙箱）', '申请升级后运行', '报告错误'],
+      ['直接启动（不经沙箱）', '受限执行，失败后升级', '报告错误'],
     )
     await click(view.menuItems()[1])
     assert.deepEqual(form.mutations, [[{ op: 'set', path: ['confinedPolicy'], value: 'escalate' }]])
-    assert.match(view.trigger('受限沙箱时').textContent ?? '', /申请升级后运行/)
+    assert.match(view.trigger('受限沙箱时').textContent ?? '', /受限执行，失败后升级/)
     assert.equal(view.menu(), null, 'the menu closes after a choice')
     // Only the unconfined choice carries the warning.
     assert.equal(view.host.querySelector('[role="note"]'), null)

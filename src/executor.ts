@@ -119,13 +119,33 @@ export class GitBashExecutor extends LocalBashExecutor {
   }
 
   /**
-   * The standing sandbox mode, or `undefined` when this composition has no
-   * sandbox provider. `tool-bash` reads this to decide whether to expose
-   * `sandbox_permissions`; reporting a mode we cannot confine would advertise
-   * an escalation that must fail.
+   * The standing sandbox mode this executor can actually honour.
+   *
+   * `tool-bash` reads it to decide whether to expose `sandbox_permissions` and
+   * whether the composition must provide a `sandboxPolicy` service, so it must
+   * be `undefined` whenever the next launch would bypass the sandbox: under
+   * `unconfined` on Windows every command runs outside it (see `planLaunch`),
+   * and advertising the session's confined mode would describe commands as
+   * sandboxed when they are not. `danger-full-access` stays visible, because
+   * that mode really is unconfined.
    */
   override get sandboxMode(): SandboxMode | undefined {
-    return this.sandbox === undefined ? undefined : this.sandboxPolicy?.defaultMode
+    const mode = this.sandboxPolicy?.defaultMode
+    if (this.sandbox === undefined || mode === undefined) return undefined
+    return this.bypassesSandbox(mode) ? undefined : mode
+  }
+
+  /** Whether `mode` would be launched outside the sandbox in this composition. */
+  private bypassesSandbox(mode: SandboxMode): boolean {
+    if (mode === 'danger-full-access') return false
+    return (
+      planLaunch({
+        hasSandbox: true,
+        policyMode: mode,
+        choice: this.confinedPolicy,
+        platform: process.platform,
+      }).kind === 'direct'
+    )
   }
 
   /** The exact argv for one command. */
@@ -171,13 +191,13 @@ export class GitBashExecutor extends LocalBashExecutor {
     // or a confined Windows policy that opts out. The argv is still ours, which
     // is the whole point of this class.
     if (plan.kind === 'direct') {
-      const mode: SandboxMode = policy?.mode ?? 'danger-full-access'
-      // A direct launch under a confined policy means this child is not sandboxed
-      // at all. Keep the policy mode (it is still the standing session mode) but
-      // report partial enforcement instead of implying a full boundary, so a
-      // consumer that needs the absolute boundary can tell what happened.
+      // Under a confined standing policy this child runs outside the sandbox, so
+      // the settled facts describe the *effective* boundary (`danger-full-access`)
+      // instead of repeating the session mode: `enforcement` is an official enum
+      // describing how well a live backend contains the child, and there is no
+      // backend here to describe. The session's own mode is unaffected.
       const bypassed = policy !== undefined && policy.mode !== 'danger-full-access'
-      const facts = bypassed ? { mode, denied: false, enforcement: 'partial' as const } : { mode, denied: false }
+      const facts = { mode: bypassed ? ('danger-full-access' as const) : (policy?.mode ?? 'danger-full-access'), denied: false }
       const execution = await this.executeArgv(spec, argv)
       return decorateResult(execution, (result) => ({ ...result, sandbox: facts }))
     }

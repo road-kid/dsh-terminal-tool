@@ -25,9 +25,9 @@ export const zh: Dictionary = {
   'row.path.missing': '点「自动发现」扫描本机，或直接填入 bash.exe 的完整路径。',
   'row.confined.label': '受限沙箱时',
   'row.confined.description':
-    'Windows 沙箱会把命令降到低完整性，Git Bash 无法在其中启动；这里决定怎么处理。',
+    'Windows 沙箱会把命令降到低完整性，Git Bash 无法在其中启动；这里决定此时怎么办。',
   'row.confined.unconfined': '直接启动（不经沙箱）',
-  'row.confined.escalate': '申请升级后运行',
+  'row.confined.escalate': '受限执行，失败后升级',
   'row.confined.fail': '报告错误',
   'row.confined.unconfinedNotice': '注意：选它之后，模型执行的命令不受文件沙箱限制。',
   'row.discover': '自动发现',
@@ -35,6 +35,7 @@ export const zh: Dictionary = {
   'row.foundNone': '没有找到 Git Bash，请直接填入 bash.exe 的完整路径。',
   'row.notSupported': '当前 DSH 版本不支持自动切换：{reason}',
   'row.saveFailed': '保存失败：{message}',
+  'row.requestFailed': '请求失败：{detail}',
   'row.rejected': '宿主拒绝了这次保存（版本冲突或字段不可编辑），请刷新后重试。',
   'row.unavailable': '宿主设置服务不可用，无法保存。',
 }
@@ -51,9 +52,9 @@ export const en: Dictionary = {
   'row.path.missing': 'Choose "Auto-detect" to scan this machine, or type the full path to bash.exe.',
   'row.confined.label': 'Under a confined sandbox',
   'row.confined.description':
-    'The Windows sandbox drops commands to low integrity, where Git Bash cannot start; this decides how to handle it.',
+    'The Windows sandbox drops commands to low integrity, where Git Bash cannot start; this decides what happens then.',
   'row.confined.unconfined': 'Run directly (no sandbox)',
-  'row.confined.escalate': 'Run after escalation',
+  'row.confined.escalate': 'Confined, escalate on failure',
   'row.confined.fail': 'Report an error',
   'row.confined.unconfinedNotice': 'Note: with this choice, commands the model runs are not file-sandboxed.',
   'row.discover': 'Auto-detect',
@@ -61,6 +62,7 @@ export const en: Dictionary = {
   'row.foundNone': 'No Git Bash found. Type the full path to bash.exe.',
   'row.notSupported': 'Not supported by this DSH version: {reason}',
   'row.saveFailed': 'Save failed: {message}',
+  'row.requestFailed': 'Request failed: {detail}',
   'row.rejected': 'The host rejected this save (version conflict or a non-editable field). Refresh and retry.',
   'row.unavailable': 'The host settings service is unavailable, so changes cannot be saved.',
 }

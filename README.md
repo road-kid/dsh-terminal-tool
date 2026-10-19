@@ -195,7 +195,9 @@ exit -1073741502
 | `escalate` | 先按官方方式进入沙箱；MSYS 启动失败被标为 `denied`，模型收到官方升级提示后带 `sandbox_permissions: danger-full-access` 重试，由宿主审批 | 首次失败 + 一次审批往返 |
 | `fail` | 抛 `SandboxUnavailableError`，错误信息提示把 `confinedPolicy` 改成 `unconfined`，或带 `sandbox_permissions: danger-full-access` 重试 | 明确报错，不自动重试 |
 
-**结果事实**：`unconfined` 直启时结果仍带当前会话档位的 `sandbox.mode`，但 `sandbox.enforcement` 标记为 `partial`（宿主官方枚举里最接近的一档），不会让调用方误以为这一层边界完整；`escalate` 保持官方 `full`/`partial` 原值。
+**结果事实**：`unconfined` 直启时结果把 `sandbox.mode` 报成 `danger-full-access`——这是这次调用**实际**的边界，因为没有任何后端包住子进程；`sandbox.enforcement` 不填（官方枚举描述的是"有活动后端时能保证多少"，此时没有后端可描述）。`escalate` 走 `confine()`，`mode` / `enforcement` 保持官方原值。
+
+**工具声明**：`unconfined` 下执行器不再向 `tool-bash` 声明受限档位（`sandboxMode` 返回 `undefined`），所以模型不会被告知"命令在沙箱内运行"，也不会看到用不上的 `sandbox_permissions`。`escalate` / `fail` 与其它平台仍按官方方式声明。
 
 **安全含义**：`unconfined` 是默认值是显式的产品选择——Windows 受限档位下不这样就没有可用的 Git Bash；它意味着模型通过 `bash` 执行的命令不受文件沙箱约束。需要沙箱约束时选 `escalate`（官方审批）或 `fail`（拒绝执行）。设置行在选中 `unconfined` 时会显示同样的提示。
 
@@ -229,6 +231,26 @@ exit -1073741502
 4. **bash 能出现但命令报错** → 见「已知限制」第 3、4、5 条。
 
 插件永不因自身问题让会话创建失败：`agent/created` 是串行派发的，监听器抛错会让 agent 注册失败，所以整个监听体是防御式的，任何异常只落日志。
+
+---
+
+## 与其他插件共存
+
+本插件的占用面（都带 `terminal-tool` / `dsh-terminal-tool` 前缀，冲突时以先加载者为准）：
+
+| 面 | 名字 |
+|---|---|
+| 设置行 slot | `settings.general.item`，id `terminal-tool`，order `60` |
+| locale 命名空间 | `terminal-tool` |
+| bundle 行 id | `terminal-tool`（`cordis.patch.yml`） |
+| Host 路由 | `/api/dsh-terminal-tool/state`、`/api/dsh-terminal-tool/discover` |
+| 会话内工具 | 替换 `bash`、隐藏 `pwsh`（仅被替换的会话） |
+
+- **不写全局**：不改 `ctx.shell`、不改任何已加载的 preset、不写宿主安装目录。效果只落在 `agent/created` 时替换的那个会话上。
+- **与另一个 Git Bash 插件（如 `dsh-gitbash-shell`）同时安装**：两者都想替换会话的 `bash` 工具。本插件在发现同 scope 已有 `bash` 工具时跳过替换（`already-replaced`），但**不区分**那个 `bash` 是否来自本插件；此时设置行仍显示当前选择，实际会话可能用的是另一份执行器。只装一个即可。
+- **与持久终端插件（`@deepseek-ai/dsh-experimental-terminal-bundle` 等）**：互不干扰。持久终端是独立的 `terminals` 服务与 `terminal_*` 工具，本插件不注册后端、不读它的状态；`terminal-*` 工具里的 shell 仍由该 bundle 自己的后端决定。
+- **与 UI 插件（如侧边栏 / 快捷键）**：只在设置页占用一行、一个 locale 命名空间，无其它 DOM 或全局状态。
+- **热禁用**：禁用插件后，已按 Git Bash 装配的会话不会切回 `pwsh`（工具与 prompt 段在会话创建时定稿）；新会话恢复官方终端工具。
 
 ---
 
@@ -276,9 +298,9 @@ npm run build         # esbuild → lib/index.js（Host ESM）+ lib/client.js（
 npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / 客户端半区装载形状 / bundle 未内联第一方 / atom specifier 保持 external（15 项）
 npm run clientsmoke   # 真实执行 lib/client.js：模块装载形状、react 与 atom external、apply 注册行、无 configForms 时降级、迟到服务替换、HMR 幂等（8 项）
 npm run rowselftest   # 行状态机 15 项：/state 读取、乐观写入、自动发现持久化、各类失败提示
-npm run rendertest    # 在 jsdom 里真实渲染并点击：按 role/aria 断言下拉触发器、菜单项与路径 Input（11 项；官方 atoms 由 scripts/primitives-double.mjs 顶替）
+npm run rendertest    # 在 jsdom 里真实渲染并点击：按 role/aria 断言下拉触发器、菜单项与路径 Input（12 项；官方 atoms 由 scripts/primitives-double.mjs 顶替）
 npm run selftest      # 路径、发现、快照、受限启动决策、/api 路由注册 35 项
-npm run integration   # 在真实第一方服务上跑完整替换流程（7 项）
+npm run integration   # 在真实第一方服务上跑完整替换流程（8 项）
 npm run check         # typecheck → build → contractcheck → clientsmoke → selftest → rowselftest → rendertest → integration
 ```
 

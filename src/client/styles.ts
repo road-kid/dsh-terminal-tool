@@ -13,6 +13,9 @@
  * without reading it.
  */
 
+/** Client module id; the loader removes sheets owned by `data-plugin=<id>`. */
+const PLUGIN_ID = 'dsh-terminal-tool'
+
 /** Marker attribute used to find (and reuse) the injected sheet after HMR. */
 export const STYLE_TAG_ID = 'dsh-terminal-tool/row.css'
 
@@ -37,12 +40,23 @@ const CSS = `
 .tterm-path-selector .tterm-selector{width:100%}
 `.trim()
 
-/** Inject the stylesheet once; a re-registration after HMR reuses the tag. */
-export function injectStyles(): void {
+/**
+ * Inject the stylesheet while the module is materialized.
+ *
+ * The module loader claims sheets *during* factory materialization
+ * (`claimStyles`) and only removes claimed sheets when the plugin is disabled,
+ * so this cannot run from a React effect. Both the ownership attribute the
+ * loader removes and the marker used to reuse the tag on reload are set, which
+ * is what the official client packages do as well.
+ */
+function injectStyles(): void {
   if (typeof document === 'undefined') return
-  if (document.querySelector(`style[data-plugin-css="${STYLE_TAG_ID}"]`) !== null) return
+  if (document.querySelector(`style[data-plugin="${PLUGIN_ID}"]`) !== null) return
   const style = document.createElement('style')
+  style.setAttribute('data-plugin', PLUGIN_ID)
   style.setAttribute('data-plugin-css', STYLE_TAG_ID)
   style.textContent = CSS
   document.head.append(style)
 }
+
+injectStyles()

@@ -14,6 +14,9 @@
  * The row degrades to read-only with an explanation rather than breaking boot.
  */
 
+// The row's stylesheet is injected at module materialization (the loader claims
+// sheets only then), so the import must exist even though nothing is used from it.
+import './styles.ts'
 import { en, LOCALE_NAMESPACE, zh } from './locales.ts'
 import { TerminalToolRow } from './row.tsx'
 import { SETTINGS_NAMESPACE } from '../shared/protocol.ts'
@@ -120,10 +123,14 @@ export function apply(ctx: ClientContext): void {
   if (locale !== undefined) {
     ctx.effect(() => {
       try {
-        locale.register(LOCALE_NAMESPACE, { zh, en })
+        // `register` returns its own disposer; returning it from the effect is
+        // what removes the dictionary when this fiber is disposed (and what
+        // keeps a reload from leaving a dead namespace behind).
+        return locale.register(LOCALE_NAMESPACE, { zh, en })
       } catch {
         // Namespace already taken — a re-apply after HMR. Reusing the existing
         // dictionary is exactly what we want, so this is not an error.
+        return undefined
       }
     }, 'terminal-tool: locale')
   }

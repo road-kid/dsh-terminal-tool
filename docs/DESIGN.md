@@ -6,7 +6,7 @@
 | 插件 entry id | `terminal-tool` |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0`（Windows / Desktop profile） |
 | 契约基线 | 各第一方包 `lib/types/*.d.ts`（0.2.1-rc.2，npm 实数） |
-| 文档状态 | 实现定稿（0.4.0） |
+| 文档状态 | 实现定稿（0.4.1） |
 
 > **临时替代方案**：DSH 还没有内置的「终端 / Git Bash 选择」能力，Windows 上平台组合只提供 PowerShell。**在官方能力落地前，本插件是它的临时替代方案**：复用官方执行器与工具，在 `agent/created` 里把新会话的终端换成 Git Bash；Windows 受限档位下的 `confinedPolicy` 也属于这段临时接线，不改变宿主沙箱本身。**官方提供等价设置后即可停用本插件**——移除 profile 里的插件行并重启，新会话即回到官方终端工具。插件不改 DSH 安装目录、不改任何 preset、不接管全局 `ctx.shell`，配置只落当前 profile 的 patch 层，卸载无残留。
 
@@ -120,9 +120,10 @@ return this.extend({ [symbols.isolate]: shadow });
 
 即：为每个 agent 建一个 `agentCtx.isolate('shell')` 的子上下文，在这个子树里挂我们的执行器
 （它 `super(ctx, 'shell')` 注册为子树内的 `ctx.shell`），再在同一子树里挂官方 `tool-bash`。
-子树外（host 全局、其它 agent）看到的仍然是官方 pwsh 执行器 —— 与官方
-`@deepseek-ai/dsh-experimental-terminal-bundle` 用 `isolate: { terminals: true }` 的做法同构，
-属于第一方已验证的隔离手法。
+子树外（host 全局、其它 agent）看到的仍然是官方 pwsh 执行器。机制与官方
+`@deepseek-ai/dsh-experimental-terminal-bundle` 的 `isolate: { terminals: true }` 相同
+（都是按名取一个全新影子），但隔离的服务名与被隔离的 bundle 不同：那边是 `terminals` 服务
+与持久终端后端，这里是 `shell` 执行器。两者互不感知，也不共享影子。
 
 > 实现细节：`isolate(name, label?)` 的 `label` 类型是 `symbol`，不传时 cordis 自己
 > `Symbol(name)` 生成一个新 symbol，于是**每次调用得到全新的私有影子**——正是这里要的语义
@@ -359,10 +360,11 @@ export class GitBashExecutor extends LocalBashExecutor {
   决策：无沙箱 / 无 policy → `direct`；`danger-full-access` → `direct`（原有行为）；
   非 win32 → `confine`；win32 + 受限档位按 `unconfined` → `direct`、`escalate` → `confine`、
   `fail` → 抛 `SandboxUnavailableError`。
-  - `direct`：直接 `executeArgv(spec, argv)`，结果保持 `sandbox: { mode, denied: false }`
-    （无 policy 时 `mode` 取 `danger-full-access`）。若这次直启是受限档位下 `unconfined`
-    主动选择的，则额外标 `enforcement: 'partial'`，避免调用方把这次调用误认为边界完整；
-    `escalate`/`confine` 路径仍透传官方 `enforcement`。
+  - `direct`：直接 `executeArgv(spec, argv)`，结果带 `sandbox: { mode, denied: false }`。
+    `mode` 报的是**这次调用的实际边界**：无 policy 或受限档位下 `unconfined` 直启时取
+    `danger-full-access`（没有后端包住子进程）。不填 `enforcement`——官方该枚举描述的是
+    "有活动后端时能保证多少"，这里没有后端可描述，借用 `partial` 会让调用方误以为存在一层
+    被削弱的边界。`escalate`/`confine` 路径仍透传官方 `enforcement`。
   - `confine`：`ctx.sandbox.confine(argv, policy, signal)` 取 `.argv` 再执行，并沿用官方
     `@deepseek-ai/dsh-sandbox` 的 `classifyRunnerFailure` / `isRunnerSpawnFailure` /
     `SandboxUnavailableError` / 拒绝签名匹配来产出 `result.sandbox`
@@ -370,8 +372,11 @@ export class GitBashExecutor extends LocalBashExecutor {
   - `fail`：错误信息指导改 `confinedPolicy`，或带 `sandbox_permissions: danger-full-access`
     重试；不自动重试。
 
-  `sandboxMode` getter 返回 `ctx.sandboxPolicy.defaultMode` —— 这是工具层决定是否暴露
-  `sandbox_permissions` 的依据（F6）。
+  `sandboxMode` getter 是工具层决定是否暴露 `sandbox_permissions`、以及是否要求
+  `ctx.sandboxPolicy` 存在的依据（F6）。它返回 `ctx.sandboxPolicy.defaultMode`，但当这次
+  启动实际会绕过沙箱（win32 + 受限档位 + `unconfined`）时返回 `undefined`：否则
+  `tool-bash` 会向模型宣称命令在沙箱内运行、并暴露用不上的升级参数。`danger-full-access`
+  仍照常返回，因为那本来就是未受限模式。
 - **MSYS 启动失败分类**：`onProcessDone` 计算 `denied` 时同时匹配官方拒绝签名与
   `isMsysStartupDenial(exitCode, stderr)`。后者在退出码为 `3221225794` / `3221225506`，
   或 stderr（小写后）含 `ntcreatedirectoryobject(\basenamedobjects\msys-` /
@@ -454,7 +459,7 @@ Git Bash 的 `git`/`ls`/`grep` 需要 `Git\bin`、`Git\usr\bin`、以及 `ucrt64
 | 客户端半区 | `node scripts/clientsmoke.mjs` | 真实执行 `lib/client.js`：模块 id、`react` 与官方 UI atoms external、`inject` 面、`apply` 注册 `settings.general.item`、无 `configForms` 时降级为只读、迟到 `configForms` 替换而非叠加、重复 `apply` 幂等（8 项） |
 | 行状态机 | `node scripts/rowselftest.mjs` | `/state` 读入、平台决定显隐、乐观写入、受限策略同步与写入、revision 冲突与抛错提示、自动发现持久化候选、发现为空（15 项） |
 | 行渲染 | `node scripts/rendertest.mjs` | jsdom + React 18 真实渲染 `lib/client.js` 导出的组件，按 role/aria 断言：标题与描述、方言下拉触发器（`button[aria-haspopup="menu"]`）、`role="menuitem"`、选 bash 出路径行、受限策略下拉与切换写回、路径 `input[aria-label="Git Bash 路径"]`、Enter 提交、自动发现变下拉、发现为空、非 Windows 不渲染、只读禁用（11 项）。官方 atoms 由行为级替身 `scripts/primitives-double.mjs` 提供，断言不依赖 CSS 类名 |
-| 集成 | `node scripts/integration.mjs`：真实 `dsh-tools` / `dsh-system-prompt` / `dsh-tool-bash` / `dsh-scope` 挂在一次性 cordis 应用里 | `bash` 出现且 `pwsh` 消失、祖先 scope 仍见 `pwsh`、prompt 段被清空、真命令跑在 Git Bash 上、二次 install 幂等、`dialect=pwsh` 完全不替换、`unconfined` 不调用 `confine`、`escalate` 的 MSYS 崩溃标 `denied`、`apply()` 接线 `agent/created`+`agent/disposed`（7 项） |
+| 集成 | `node scripts/integration.mjs`：真实 `dsh-tools` / `dsh-system-prompt` / `dsh-tool-bash` / `dsh-scope` 挂在一次性 cordis 应用里 | `bash` 出现且 `pwsh` 消失、祖先 scope 仍见 `pwsh`、prompt 段被清空、真命令跑在 Git Bash 上、二次 install 幂等、`dialect=pwsh` 完全不替换、`unconfined` 不调用 `confine` 且结果报 `danger-full-access`、`escalate` 的 MSYS 崩溃标 `denied`、`sandboxMode` 在会绕过时隐藏、`apply()` 接线 `agent/created`+`agent/disposed`（8 项） |
 | 人工 | 装进 profile + 重启 + 新会话 | 模型工具目录只有 `bash`；卡片与退出码正常；`dialect=pwsh` 时完全复原 |
 
 ---

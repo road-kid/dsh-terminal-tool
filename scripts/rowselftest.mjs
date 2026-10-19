@@ -288,9 +288,13 @@ await test('discover() reports when nothing was found', async () => {
   })
 })
 
-await test('discover() surfaces a transport failure as an error', async () => {
+await test('discover() surfaces a transport failure as a translated error', async () => {
   const form = formStub()
-  const controller = createRowController(form, (key) => key)
+  const calls = []
+  const controller = createRowController(form, (key, params) => {
+    calls.push([key, params])
+    return key
+  })
   await withFetch(
     async () => new Response('nope', { status: 500 }),
     async () => {
@@ -298,7 +302,10 @@ await test('discover() surfaces a transport failure as an error', async () => {
       await settle()
       const state = controller.store.getState()
       assert.equal(state.discovering, false)
-      assert.equal(state.error, 'HTTP 500')
+      // The status line is protocol detail; the row frames it with its own
+      // translated sentence instead of surfacing `HTTP 500` as the message.
+      assert.equal(state.error, 'row.requestFailed')
+      assert.deepEqual(calls.at(-1), ['row.requestFailed', { detail: 'HTTP 500' }])
     },
   )
 })

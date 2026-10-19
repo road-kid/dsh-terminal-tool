@@ -147,13 +147,21 @@ export async function installSession(
     // agent inherits, so a composition without `pwsh` must skip rather than throw.
     if (tools.get('pwsh', agent) !== undefined) {
       undo.push(tools.restrict({ deny: ['pwsh'] }))
-      undo.push(
-        systemPrompt.section({
-          name: 'tool:pwsh',
-          order: systemPrompt.getSectionOrder('TOOL_PWSH') ?? TOOL_PWSH_ORDER,
-          text: '',
-        }),
-      )
+      // Dropping the pwsh guidance is a nice-to-have: the section registry
+      // rejects a duplicate name inside one scope, and failing the whole install
+      // over a shadowed prompt section would leave the session on pwsh for no
+      // good reason. The bash tool is already what makes the session work.
+      try {
+        undo.push(
+          systemPrompt.section({
+            name: 'tool:pwsh',
+            order: systemPrompt.getSectionOrder('TOOL_PWSH') ?? TOOL_PWSH_ORDER,
+            text: '',
+          }),
+        )
+      } catch (error) {
+        warn(id, `cannot shadow the tool:pwsh prompt section: ${error instanceof Error ? error.message : String(error)}`)
+      }
     } else {
       warn(id, 'no inherited pwsh tool to hide; leaving the inherited tool list alone')
     }

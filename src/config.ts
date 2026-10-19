@@ -59,10 +59,16 @@ export const Config = z.object({
   pythonUtf8: z.boolean().default(true).volatile(),
 
   /**
-   * What to do when a confined Windows sandbox cannot start Git Bash. The
-   * default runs bash directly, because the alternative is a crash before the
-   * command is even parsed; `escalate` hands the decision to the first-party
-   * approval flow, and `fail` reports a configuration error instead.
+   * What to do when a confined Windows sandbox cannot start Git Bash.
+   *
+   * - `unconfined` (default): launch bash directly, outside the sandbox. Nothing
+   *   crashes, but the child is not file-sandboxed.
+   * - `escalate`: keep the confined launch. The MSYS startup failure is then
+   *   reported as a sandbox denial, which is what makes the first-party bash
+   *   tool offer `sandbox_permissions` and lets the model retry with
+   *   `danger-full-access` through the official approval flow. The approval
+   *   itself belongs to that flow — the plugin never approves anything.
+   * - `fail`: report a sandbox error instead of running anything.
    */
   confinedPolicy: z.union(['unconfined', 'escalate', 'fail'] as const).default('unconfined').volatile(),
 })

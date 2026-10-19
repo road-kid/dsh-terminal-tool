@@ -42,7 +42,7 @@ interface RouteDeps {
 interface FetchRoute {
   readonly path: string
   readonly methods: readonly string[]
-  readonly requestBody: 'buffered' | 'stream'
+  readonly requestBody: 'buffered' | 'streaming'
   readonly fetch: (request: Request) => Promise<Response>
 }
 

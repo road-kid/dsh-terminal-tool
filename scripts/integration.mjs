@@ -89,13 +89,13 @@ function serviceContext(ctx, names) {
 }
 
 /** A host with every service the bash tool actually needs. */
-async function createHost({ sandbox = true } = {}) {
+async function createHost({ sandbox = true, mode = 'danger-full-access' } = {}) {
   const ctx = new Context()
   ctx.plugin(SubprocessLocal)
   if (sandbox) {
     ctx.plugin(SandboxLocal)
     ctx.plugin(SessionProjectionRegistry)
-    ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access' })
+    ctx.plugin(SandboxPolicyService, { mode })
   }
   ctx.plugin(SystemPrompt)
   ctx.plugin(ToolRuntime)
@@ -331,12 +331,35 @@ await test('confinedPolicy unconfined runs Git Bash directly on Windows', async 
   await execution.done
 
   assert.equal(fake.calls.length, 0, 'unconfined must not call sandbox.confine()')
-  assert.equal(result.sandbox.mode, 'workspace-write', 'the resolved mode is still reported')
+  // The settled facts describe what actually ran: no sandbox backend contained
+  // the child, so the effective boundary is full access and there is nothing for
+  // `enforcement` (an official enum about a *live* backend) to describe.
+  assert.equal(result.sandbox.mode, 'danger-full-access', 'a bypassed launch reports the effective boundary')
   assert.equal(result.sandbox.denied, false)
-  assert.equal(result.sandbox.enforcement, 'partial', 'a bypassed launch must not claim a full boundary')
+  assert.equal(result.sandbox.enforcement, undefined)
   assert.match(result.stdout.text, /MINGW|MSYS/i, `expected an MSYS uname, got: ${result.stdout.text}`)
 
   await fiber.dispose()
+})
+
+await test('sandboxMode hides a standing mode the executor would bypass', async () => {
+  const host = await createHost({ mode: 'workspace-write' })
+  const bashPath = 'C:\Program Files\Git\bin\bash.exe'
+
+  // `unconfined` bypasses the sandbox on Windows, so advertising the standing
+  // `workspace-write` mode would tell `tool-bash` (and the model) that commands
+  // are confined when they are not. On other platforms the same choice still
+  // confines, so the mode is honest and stays visible.
+  const unconfined = await mountExecutor(host.ctx, { bashPath, confinedPolicy: 'unconfined' })
+  const expectedUnconfined = process.platform === 'win32' ? undefined : 'workspace-write'
+  assert.equal(unconfined.executor.sandboxMode, expectedUnconfined)
+  await unconfined.fiber.dispose()
+
+  const escalate = await mountExecutor(host.ctx, { bashPath, confinedPolicy: 'escalate' })
+  assert.equal(escalate.executor.sandboxMode, 'workspace-write', 'escalate keeps the standing mode')
+  await escalate.fiber.dispose()
+
+  await host.ctx.registry.delete(host.ctx.get('shell'))
 })
 
 await test('confinedPolicy escalate marks an MSYS startup crash as denied', async () => {

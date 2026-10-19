@@ -8,7 +8,23 @@ import { ROUTE_DISCOVER, ROUTE_STATE, type DiscoverView, type StateView } from '
  * browser carries the session cookie; nothing else has to be sent.
  */
 
-/** One failed call: `HTTP <status>` for a transport failure, the body's message otherwise. */
+/**
+ * One failed call.
+ *
+ * `detail` is protocol-level (`HTTP 500`, or the Host's own message) and is
+ * meant to be framed by the caller's translated sentence rather than thrown at
+ * the user raw, so the row can stay in one language.
+ */
+export class RouteError extends Error {
+  readonly detail: string
+
+  constructor(detail: string) {
+    super(detail)
+    this.name = 'RouteError'
+    this.detail = detail
+  }
+}
+
 async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {
     method: 'POST',
@@ -16,11 +32,11 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
     body: JSON.stringify(body ?? {}),
     ...(signal === undefined ? {} : { signal }),
   })
-  if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
+  if (!response.ok) throw new RouteError(`HTTP ${String(response.status)}`)
   const payload: unknown = await response.json()
   if (payload !== null && typeof payload === 'object' && (payload as { ok?: unknown }).ok === false) {
     const message = (payload as { error?: unknown }).error
-    throw new Error(typeof message === 'string' ? message : 'request failed')
+    throw new RouteError(typeof message === 'string' ? message : 'no detail')
   }
   return payload as T
 }

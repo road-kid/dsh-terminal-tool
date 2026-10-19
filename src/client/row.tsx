@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ReactElement } from 'react'
 import {
   Button,
@@ -16,7 +16,6 @@ import {
   type RowState,
 } from './store.ts'
 import type { ConfinedPolicy } from '../confined.ts'
-import { injectStyles } from './styles.ts'
 import type { RowProps } from './types.ts'
 
 /**
@@ -116,17 +115,12 @@ export function TerminalToolRow({ t, form }: RowProps): ReactElement | null {
   // The path draft lives in component state and is pushed on blur or Enter; the
   // effect below re-seeds it whenever the Host value changes.
   const [draft, setDraft] = useState(state.bashPath)
-  const started = useRef(false)
 
-  useEffect(() => {
-    injectStyles()
-  }, [])
-
-  useEffect(() => {
-    if (started.current) return
-    started.current = true
-    return controller.start()
-  }, [controller])
+  // `start()` is self-contained (one `/state` read plus a form subscription) and
+  // its return value tears both down, so the effect can simply start and stop it
+  // per mount. Guarding it with a ref would break the strict-mode double invoke:
+  // the second mount would see the guard set and never resubscribe.
+  useEffect(() => controller.start(), [controller])
 
   useEffect(() => {
     setDraft(state.bashPath)
@@ -169,7 +163,11 @@ export function TerminalToolRow({ t, form }: RowProps): ReactElement | null {
             <div className="tterm-hint">{t('row.notSupported', { reason: state.unsupportedReason ?? '' })}</div>
           )}
           {state.settingsAvailable ? null : <div className="tterm-hint">{t('row.unavailable')}</div>}
-          {state.notice === undefined ? null : <div className="tterm-hint">{state.notice}</div>}
+          {state.notice === undefined ? null : (
+            <div className="tterm-hint" role="status">
+              {state.notice}
+            </div>
+          )}
           {state.error === undefined ? null : (
             <div className="tterm-error" role="alert">
               {state.error}

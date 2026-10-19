@@ -141,6 +141,11 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** A failed `/state` or `/discover` call, framed by the row's own sentence. */
+function requestError(translate: Translate, error: unknown): string {
+  return translate('row.requestFailed', { detail: messageOf(error) })
+}
+
 /** Narrow a wire value to the three legal policies, defaulting to `unconfined`. */
 export function normalizeConfinedPolicy(value: unknown): ConfinedPolicy {
   return value === 'escalate' || value === 'fail' ? value : 'unconfined'
@@ -249,7 +254,7 @@ export function createRowController(
         ])
       })
       .catch((error: unknown) => {
-        store.setState({ discovering: false, error: messageOf(error) })
+        store.setState({ discovering: false, error: requestError(translate, error) })
       })
   }
 
@@ -285,7 +290,7 @@ export function createRowController(
         store.setState({
           status: 'ready',
           supported: false,
-          error: messageOf(error),
+          error: requestError(translate, error),
         })
       })
 
