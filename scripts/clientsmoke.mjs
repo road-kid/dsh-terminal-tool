@@ -17,8 +17,19 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { primitivesStub } from './primitives-double.mjs'
+
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const source = await readFile(join(root, 'lib', 'client.js'), 'utf8')
+
+/**
+ * The shell-seeded modules the bundle is allowed to require: react and its JSX
+ * runtime, plus the official UI atoms. The atoms are stubbed because nothing is
+ * rendered here — this script only checks the registration contract, and the
+ * published package imports the whole markdown/shiki graph.
+ */
+const EXTERNALS = ['@deepseek-ai/dsh-client-ui-primitives', 'react', 'react/jsx-runtime']
+const primitives = primitivesStub({ createElement: () => null })
 
 let passed = 0
 const failures = []
@@ -51,6 +62,7 @@ function loadBundle() {
   const required = []
   const exports = factory((specifier) => {
     required.push(specifier)
+    if (specifier === '@deepseek-ai/dsh-client-ui-primitives') return primitives
     if (specifier === 'react' || specifier === 'react/jsx-runtime') return {}
     throw new Error(`unexpected require(${specifier})`)
   })
@@ -62,9 +74,9 @@ await test('bundle registers itself under the package name', () => {
   assert.equal(id, 'dsh-terminal-tool')
 })
 
-await test('bundle keeps react external', () => {
+await test('bundle keeps react and the official UI atoms external', () => {
   const { required } = loadBundle()
-  assert.deepEqual([...new Set(required)].sort(), ['react', 'react/jsx-runtime'])
+  assert.deepEqual([...new Set(required)].sort(), EXTERNALS)
 })
 
 await test('exports the entry shape the loader calls', () => {

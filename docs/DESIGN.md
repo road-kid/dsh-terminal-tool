@@ -4,9 +4,11 @@
 |---|---|
 | 包名 | `dsh-terminal-tool` |
 | 插件 entry id | `terminal-tool` |
-| 目标宿主 | DeepSeek Harness 0.2.1-rc.2（Windows / Desktop profile） |
+| 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0`（Windows / Desktop profile） |
 | 契约基线 | 各第一方包 `lib/types/*.d.ts`（0.2.1-rc.2，npm 实数） |
-| 文档状态 | 设计定稿，编码依据 |
+| 文档状态 | 实现定稿（0.3.0） |
+
+> **临时替代方案**：DSH 还没有内置的「终端 / Git Bash 选择」能力，Windows 上平台组合只提供 PowerShell。**在官方能力落地前，本插件是它的临时替代方案**：复用官方执行器与工具，在 `agent/created` 里把新会话的终端换成 Git Bash。**官方提供等价设置后即可停用本插件**——移除 profile 里的插件行并重启，新会话即回到官方终端工具。插件不改 DSH 安装目录、不改任何 preset、不接管全局 `ctx.shell`，配置只落当前 profile 的 patch 层，卸载无残留。
 
 ---
 
@@ -17,7 +19,8 @@
 DSH 在 Windows 上只组合 PowerShell 执行器：`@deepseek-ai/dsh-base` 的补丁层用平台表达式
 把 bash 家族整条关掉（`disabled: !!js process.platform === 'win32'`，覆盖 `bash-sandbox`
 与 `tool-bash`），只留 `pwsh-sandbox` / `tool-pwsh`。结果是模型在 Windows 上只看得见
-`pwsh` 工具，而用户希望默认用本机 Git Bash。
+`pwsh` 工具，而用户希望默认用本机 Git Bash。官方尚无等价的「终端选择」设置，所以本插件
+是**临时替代品**，目标是在官方能力落地前补上这段接线。
 
 ### 1.2 本插件的能力清单
 
@@ -31,7 +34,7 @@ DSH 在 Windows 上只组合 PowerShell 执行器：`@deepseek-ai/dsh-base` 的�
 | F6 | 沙箱拒绝标记与 `sandbox_permissions` 升级链路 | 复用官方工具 + 我们执行器上报的 `sandbox` 事实 |
 | F7 | 前台等满转后台（`promoteOnTimeout`） | 官方工具的 Config 默认值即为 true |
 | F8 | 跟随会话当前目录（0.2.1+） | 官方工具的 `workingDirectory` 逻辑 |
-| F9 | 设置里可选 `pwsh` / `bash`，可指定 Git Bash 路径 | 本插件 `export const Config`（volatile 字段）→ 官方设置表单自动投影 |
+| F9 | 设置里可选 `pwsh` / `bash`，可指定 Git Bash 路径 | 本插件 `export const Config`（volatile 字段）→ 第一方 `configForms` 服务 + 自写 `settings.general.item` 行（控件为官方 UI atoms） |
 | F10 | 自动发现 Git Bash，硬排除 WSL | 本插件 `discover.ts` |
 | F11 | 路径非法时安全降级（会话照旧 pwsh，不半坏） | 替换前置校验，失败只写诊断 |
 | F12 | 只对新会话生效 | 每个 `agent/created` 读取一次配置快照 |
@@ -60,12 +63,12 @@ bash 那一套」的接线。因此本项目的每条行为都跑在第一方代
 | 工具卡片渲染 | 官方 `tool.call.toolview` 的 `bash` 槽 |
 | 执行器（argv 里那把 bash） | **继承官方 `LocalBashExecutor`，只重写 argv 与 env** |
 | 类型 | 官方 `.d.ts`（devDependency，精确钉 `0.2.1-rc.2`） |
-| 设置 UI | **自写客户端半区**（`src/client/`）：向 `settings.general.item` 注册「终端工具」行 |
+| 设置 UI | **自写客户端半区**（`src/client/`）：向 `settings.general.item` 注册「终端工具」行；控件全部复用官方 `@deepseek-ai/dsh-client-ui-primitives`（`Button` / `Input` / `Menu` / `IconChevronDownOutlineRegular`） |
 | 工具隐藏 / 提示词裁剪 | 官方 `tools.restrict()` / `systemPrompt.section()` |
 | 自动发现 | 自写（`discover.ts`，第一方无等价物） |
 | 每会话替换编排 | 自写（`replace.ts`，第一方无等价物） |
 
-这套方案成立的前提有三条，均已在本机核实：
+这套方案成立的前提有四条，均已在本机核实：
 
 1. 第一方包**以 0.2.1-rc.2 发布到 npm 且带完整 `lib/types/*.d.ts`**（已用 `npm pack`
    验证 20 个包），因此可以做真 TypeScript 类型检查，不需要 duck-typing 兜底。
@@ -74,6 +77,9 @@ bash 那一套」的接线。因此本项目的每条行为都跑在第一方代
    首行即 `import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'`）。
 3. 工具卡片渲染器 `tool.call.toolview` 的 `bash` 槽已由第一方提供，注册名为 `bash`
    的工具自动复用官方卡片。
+4. **Web shell 以冻结模块表（`PLATFORM_MODULES`）播种官方 UI atoms**：0.2.1-rc.2 起
+   `@deepseek-ai/dsh-client-ui-primitives` 和 `react` 一样由页面提供，插件 client bundle
+   只需 `require()`，既不必内联副本，也能拿到宿主样式表已经皮肤好的 CSS module 类名。
 
 净效果：自写代码约 1.7 K 行 TS，且每一条行为都跑在第一方代码上，随官方升级而升级。
 
@@ -124,6 +130,26 @@ return this.extend({ [symbols.isolate]: shadow });
 > 落地校验项：`tools.register` 的「注册到哪个 scope」由 ctx 的 agent 归属决定。
 > 若从 agent 子树注册仍落到全局层，则第二个 agent 会撞重名；因此实现里**先
 > `ctx.tools.get('bash', agent)` 探测**，已可见则跳过注册（设计为幂等），两条路径都安全。
+
+### 2.3 客户端半区：复用官方 UI atoms，而不是自绘控件
+
+设置行最初用手搓的胶囊按钮 / `<input>` / `<select>`。现在改为直接使用第一方
+`@deepseek-ai/dsh-client-ui-primitives` 的 `Button` / `Input` / `Menu` /
+`IconChevronDownOutlineRegular`，与官方 General 段的 `PreferenceRow` 同源：
+
+- **枚举偏好用官方下拉**：终端类型是一枚 36px 的触发器（`--dsw-radius-md`、
+  `--dsw-alias-bg-module-platform`、chevron），点开官方 `Menu`；命中多条候选时，
+  路径控件也换成同一套下拉。
+- **手填路径用官方 `Input`**，「自动发现」用官方 outline `Button size="sm"`。
+- 行的版式仍由 `styles.ts` 提供：两列（标题 14px/20px + 说明 12px/18px，控件居右，
+  24px 间距）、16px 纵向内边距、`.5px` 底部分隔线（`--dsw-alias-border-l2`），
+  颜色一律走 `--dsw-alias-*` 设计变量。
+- **bundle 保持该包 external**：Web shell 把它播种进冻结模块表（`PLATFORM_MODULES`），
+  插件 bundle 像 `require('react')` 一样 `require()` 它；内联第二份会复制 CSS module
+  类名，宿主样式表就皮肤不到，hooks / 上下文身份也会分裂。
+- **它只是 devDependency**：仅用于 TypeScript 类型（精确钉 `0.2.1-rc.2`），运行时由
+  宿主提供，插件不安装任何运行时依赖。目标宿主范围为 `>=0.2.1-rc.2 <0.3.0`
+  （`engines.dsh`），该范围内 Web shell 都自带这个模块表。
 
 ---
 
@@ -176,13 +202,13 @@ return this.extend({ [symbols.isolate]: shadow });
 | `src/diag.ts` | 诊断日志（文件 + `DSH_TERMINAL_TOOL_DIAG_FILE`） | ~60 |
 | `src/types.ts` | 内部类型与可选服务的最窄投影 | ~80 |
 | `src/shared/protocol.ts` | Host/客户端线路协议：路由路径、常量、视图类型 | ~100 |
-| `src/routes.ts` | 两条只读 `/api` 路由（`/state` 不扫描、`/discover` 按需扫描） | ~180 |
-| `src/client/index.ts` | 客户端入口：注册 `settings.general.item` 行（`inject=['slots','locale']`） | ~110 |
-| `src/client/row.tsx` | 行组件：胶囊切换 + 路径输入/下拉 + 「自动发现」 | ~200 |
-| `src/client/store.ts` | 行状态机：读 `/state`、写 `configForms`、自动发现、错误降级 | ~250 |
+| `src/routes.ts` | 两条 `/api` 路由（都不写配置；`/state` 不扫描、`/discover` 按需扫描） | ~180 |
+| `src/client/index.ts` | 客户端入口：注册 `settings.general.item` 行（`inject=['slots','locale']`） | ~145 |
+| `src/client/row.tsx` | 行组件：官方 atoms（方言下拉 + 路径 Input/下拉 + 「自动发现」Button） | ~230 |
+| `src/client/store.ts` | 行状态机：读 `/state`、写 `configForms`、自动发现、错误降级 | ~280 |
 | `src/client/api.ts` | 两条路由的取数封装 | ~40 |
-| `src/client/styles.ts` | 行样式（官方 `--dsw-alias-*` 设计变量） | ~50 |
-| `src/client/locales.ts` | 中英文案（`row.*` 键） | ~50 |
+| `src/client/styles.ts` | 行版式：两列骨架、下拉触发器样式（官方 `--dsw-alias-*` 设计变量） | ~50 |
+| `src/client/locales.ts` | 中英文案（`row.title` / `row.description` / 各控件与提示） | ~55 |
 
 ### 3.2 组合形态（cordis.patch.yml，全文）
 
@@ -196,32 +222,51 @@ return this.extend({ [symbols.isolate]: shadow });
 与「仅 Windows 挂载」语义一致：非 win32 时 `apply` 不执行、client bundle 不进
 启动图。不 `insert` 任何额外行，因为执行器与工具都是在**会话子树里动态挂载**的。
 
+### 3.3 客户端半区数据流
+
+```
+设置 → 通用 → 终端工具（lib/client.js）
+  ├── 挂载：POST /api/dsh-terminal-tool/state（只读，不扫描）
+  │        + configForms.get('terminal-tool') 的 snapshot（值更可信）
+  ├── 选择方言 / 提交路径 / 点「自动发现」：
+  │        POST /api/dsh-terminal-tool/discover（仅此时扫描）
+  │        然后 configForms.mutate([...]) 一次原子写回（profile patch 层）
+  └── 渲染：官方 Button / Input / Menu / IconChevronDownOutlineRegular
+           + styles.ts 提供的两列版式
+```
+
+写入不经 `/api`：两条路由只是读 / 扫描面。`/state` 与 `/discover` 的契约在
+`src/shared/protocol.ts`；设置行在拿到 `configForms` 前以只读形态渲染，服务迟到时
+替换旧注册（不会叠出两行）。
+
 ---
 
 ## 4. 配置模型（`export const Config`）
 
 规则（`@deepseek-ai/dsh-settings` README）：**只有标了 `.volatile()` 的字段才会被投影进
-设置表单**；表单按 profile entry id 定位本插件；写入落到活动 profile 的 Cordis patch，
-保留注释与 `!!js` 表达式。因此本插件的 Config 全部字段都 `.volatile()`。
+设置表单**；表单按 profile entry id（`terminal-tool`）定位本插件，由客户端半区渲染；
+写入落到活动 profile 的 Cordis patch，保留注释与 `!!js` 表达式。因此本插件的 Config
+字段全部 `.volatile()`（schemastery 不允许在整个对象上标 `.volatile()`，逐个叶子标）。
 
 ```ts
 export const Config = z.object({
-  dialect:       z.union(['pwsh', 'bash'] as const).default('pwsh'),      // F9
-  bashPath:      z.string().default(''),                                  // 空 = 自动发现
-  bashCandidates: z.array(z.string()).default([]),                        // 发现顺序 / 手动多条
-  autoDiscover:  z.boolean().default(true),
-  discoverTimeoutMs: z.number().default(1500),                            // 发现探测上限
-  loginShell:    z.boolean().default(false),                              // 是否 -l 登录壳
-  extraPath:     z.array(z.string()).default([]),                         // 追加进 PATH
-  pythonUtf8:    z.boolean().default(true),                               // F14
-}).volatile()  // 逐个字段 .volatile()
+  ...LocalBashExecutor.Config.dict,                                       // 继承官方执行器字段
+  dialect:       z.union(['pwsh', 'bash'] as const).default('pwsh').volatile(),  // F9
+  bashPath:      z.string().default('').volatile(),                       // 空 = 自动发现
+  bashCandidates: z.array(z.string()).default([]).volatile(),             // 发现顺序 / 手动多条
+  autoDiscover:  z.boolean().default(true).volatile(),
+  discoverTimeoutMs: z.number().default(1500).volatile(),                 // 发现探测上限
+  loginShell:    z.boolean().default(false).volatile(),                   // 是否 -l 登录壳
+  extraPath:     z.array(z.string()).default([]).volatile(),              // 追加进 PATH
+  pythonUtf8:    z.boolean().default(true).volatile(),                    // F14
+})
 ```
 
 语义要点：
 - `dialect` 默认 `pwsh` = 安装后**行为不变**，用户显式选 `bash` 才切换（不替用户选）。
 - `bashPath` 为空且 `autoDiscover` 为真 → 每次新会话按 `bashCandidates` + 内置发现顺序解析；
-  解析结果**不写回配置**（避免插件在只读/钩子路径上改 profile），但会写一行诊断。
-  这是有意的行为选择，已在 §12 记为 D1。
+  **会话装配路径不写回配置**（避免插件在只读/钩子路径上改 profile），但会写一行诊断。
+  写回只发生在用户点「自动发现」时（见 D1）。
 - 任一字段非法（如路径指向 WSL）→ 该会话跳过替换，会话保持 pwsh。
 
 ---
@@ -232,7 +277,9 @@ export const Config = z.object({
 
 1. `diag('apply: platform=...')`。
 2. 读一次 Config 快照并校验；非法只诊断，不抛错（配置错误不得阻断宿主启动）。
-3. 注册 `ctx.on('agent/created', …)`；监听体整体 try/catch ——
+3. `registerRoutes(ctx, …)` 注册两条 `/api` 路由（`/state` / `/discover`，都不写配置）；`connection`
+   服务是可选注入，缺失时只写诊断，设置行报「无 state」而不是让插件失败。
+4. 注册 `ctx.on('agent/created', …)`；监听体整体 try/catch ——
    **通知型监听器抛出会影响会话启动**，这是硬纪律。
 
 ### 5.2 新会话（`agent/created`）
@@ -349,6 +396,18 @@ Git Bash 的 `git`/`ls`/`grep` 需要 `Git\bin`、`Git\usr\bin`、以及 `ucrt64
 
 测试记录与生产日志分离：自测脚本一律设 `DSH_TERMINAL_TOOL_DIAG_FILE` 到临时文件。
 
+### 8.1 客户端半区（设置行）的降级
+
+| 场景 | 行为 |
+|---|---|
+| 非 Windows | 行不渲染（`/state` 回 `platform` 后 `status='hidden'`） |
+| 无 `configForms` | 行照常渲染但只读，并说明宿主设置服务不可用；不会假装能保存 |
+| `/state` 失败 | 行保留（带错误提示），避免把坏安装静默隐藏 |
+| 「自动发现」无命中 | 保留原路径，提示「没有找到 Git Bash，请直接填入 bash.exe 的完整路径。」，不清空输入 |
+| 保存被宿主拒绝 | 「宿主拒绝了这次保存（版本冲突或字段不可编辑），请刷新后重试。」 |
+| 宿主缺能力 | 行内展示「当前 DSH 版本不支持自动切换：{reason}」，控件禁用 |
+| 挂载 | 不扫描、不写配置；只有点击才触发 `/discover` 与写回 |
+
 ---
 
 ## 9. 测试策略
@@ -358,10 +417,10 @@ Git Bash 的 `git`/`ls`/`grep` 需要 `Git\bin`、`Git\usr\bin`、以及 `ucrt64
 | 类型 | `tsc --noEmit`（devDeps 钉 `@deepseek-ai/*@0.2.1-rc.2` 的真实 `.d.ts`） | 0 error |
 | 纯逻辑单测 | `node scripts/selftest.mjs` | 发现顺序、WSL 排除、路径校验、PATH 去重、env 组装、`/state` 与 `/discover` 的 handler、两条路由的注册与降级（28 项） |
 | 执行器 | `scripts/integration.mjs` 在真实 `tool-bash` 下起真 Git Bash | `echo "$BASH_VERSION"` / `uname -s` → `MINGW64_NT-…` |
-| 契约 | `node scripts/contractcheck.mjs` | Config 字段全 volatile；patch 行 id/name/disabled 正确；导出面完整；客户端 bundle 装载形状（15 项） |
-| 客户端半区 | `node scripts/clientsmoke.mjs` | 真实执行 `lib/client.js`：模块 id、react external、`inject` 面、`apply` 注册 `settings.general.item`、无 `configForms` 时降级为只读、迟到 `configForms` 替换而非叠加、重复 `apply` 幂等（8 项） |
+| 契约 | `node scripts/contractcheck.mjs` | Config 字段全 volatile；patch 行 id/name/disabled 正确；导出面完整；客户端 bundle 装载形状；bundle 未内联第一方；`react` 与官方 atoms specifier 保持 external（15 项） |
+| 客户端半区 | `node scripts/clientsmoke.mjs` | 真实执行 `lib/client.js`：模块 id、`react` 与官方 UI atoms external、`inject` 面、`apply` 注册 `settings.general.item`、无 `configForms` 时降级为只读、迟到 `configForms` 替换而非叠加、重复 `apply` 幂等（8 项） |
 | 行状态机 | `node scripts/rowselftest.mjs` | `/state` 读入、平台决定显隐、乐观写入、revision 冲突与抛错提示、自动发现持久化候选、发现为空（13 项） |
-| 行渲染 | `node scripts/rendertest.mjs` | jsdom + React 18 真实渲染 `lib/client.js` 导出的组件：标题与胶囊、初始选中、点 bash 出路径行、单路径渲染 input、Enter 提交、自动发现变 select、发现为空、非 Windows 不渲染、只读禁用（9 项） |
+| 行渲染 | `node scripts/rendertest.mjs` | jsdom + React 18 真实渲染 `lib/client.js` 导出的组件，按 role/aria 断言：标题与描述、方言下拉触发器（`button[aria-haspopup="menu"]`）、`role="menuitem"`、选 bash 出路径行、路径 `input[aria-label="Git Bash 路径"]`、Enter 提交、自动发现变下拉、发现为空、非 Windows 不渲染、只读禁用（9 项）。官方 atoms 由行为级替身 `scripts/primitives-double.mjs` 提供，断言不依赖 CSS 类名 |
 | 集成 | `node scripts/integration.mjs`：真实 `dsh-tools` / `dsh-system-prompt` / `dsh-tool-bash` / `dsh-scope` 挂在一次性 cordis 应用里 | `bash` 出现且 `pwsh` 消失、祖先 scope 仍见 `pwsh`、prompt 段被清空、真命令跑在 Git Bash 上、二次 install 幂等、`dialect=pwsh` 完全不替换、`apply()` 接线 `agent/created`+`agent/disposed`（5 项） |
 | 人工 | 装进 profile + 重启 + 新会话 | 模型工具目录只有 `bash`；卡片与退出码正常；`dialect=pwsh` 时完全复原 |
 
@@ -374,20 +433,26 @@ dsh-terminal-tool/
 ├── package.json          # name / dsh.bundle.patch / exports / files / engines
 ├── cordis.patch.yml      # 仅 Windows 挂载的一行 insert
 ├── tsconfig.json         # strict，noEmit
-├── build.mjs             # esbuild 打包 src → lib（+ 手写 .d.ts）
+├── build.mjs             # esbuild 打包 src → lib（+ 手写 .d.ts）；react 与官方 atoms external
 ├── locale/{en,zh}.json   # meta.title / meta.description（强制）
 ├── assets/icon.svg       # ≤256 KiB，包内相对路径
-├── src/*.ts              # 8 个模块 + testing.ts（仅测试用入口，不发布）
+├── src/*.ts              # 宿主模块 + shared/protocol.ts + testing.ts（仅测试用入口，不发布）
+├── src/client/*          # 客户端半区（官方 UI atoms + 版式 + 文案）
 ├── scripts/selftest.mjs
 ├── scripts/contractcheck.mjs
+├── scripts/clientsmoke.mjs
+├── scripts/rowselftest.mjs
+├── scripts/rendertest.mjs
+├── scripts/primitives-double.mjs  # 官方 UI atoms 的行为级测试替身
 ├── scripts/integration.mjs
 ├── docs/DESIGN.md        # 本文档
 └── README.md             # 安装/使用/排障/已知限制
 ```
 
-发布包（`npm pack`）只含：`lib/index.js`、`lib/index.js.map`、`lib/types/index.d.ts`、
-`locale/*.json`、`assets/icon.svg`、`cordis.patch.yml`、`README.md`、`package.json` ——
-`src/`、`scripts/`、`docs/`、`lib/testing.js` 一律不进 tarball。
+发布包（`npm pack`）只含：`lib/index.js`、`lib/index.js.map`、`lib/client.js`、
+`lib/client.js.map`、`lib/types/**`、`locale/*.json`、`assets/icon.svg`、
+`cordis.patch.yml`、`README.md`、`LICENSE`、`package.json` —— `src/`、`scripts/`、
+`docs/`、`lib/testing.js` 一律不进 tarball。
 
 ---
 
@@ -403,6 +468,8 @@ dsh-terminal-tool/
    DSH 按 UTF-8 解码 → 中文乱码；`chcp 65001` 无效。仅缓解 Python（`PYTHONIOENCODING`）。
 6. `cmd /c` 会被 MSYS 参数改写，需 `cmd //c` 或 `MSYS2_ARG_CONV_EXCL='*'`。
 7. 首次安装必须重启 DSH（运行中插入的 row 只进组合树，`apply` 不会被调用）。
+8. 宿主版本限定 `>=0.2.1-rc.2 <0.3.0`（`engines.dsh`）：设置行依赖 Web shell 的官方 UI
+   atoms 模块表（`PLATFORM_MODULES`），大版本变更后需重新验证；Host 半区的替换逻辑不依赖它。
 
 ---
 
@@ -414,7 +481,8 @@ dsh-terminal-tool/
 | D2 | ~~用官方 settings 自动表单替代「设置→通用→终端工具」自定义行~~ | **该假设错误，已修正**：0.2.1-rc.2 的 `dsh-settings` 只在 Host 侧算 `volatileForm`/`autoGenerate`，全 asar 没有任何 client bundle 消费它渲染页面（`autoGenerate` 的语义只写在协议注释里）。因此设置页不会有任何自动 UI，必须自写 `settings.general.item` 行 —— 已实现于 `src/client/` |
 | V1 | `tools.register` 从 agent 子树注册的落点（本层 vs 全局层） | **已在集成测试中确认落在 agent 自己的层**：`bash` 对该 agent 可见、对祖先 preset scope 不可见；幂等仍靠 `tools.get('bash', agent)` 探测双保险 |
 | V2 | 官方 `tool-bash` 在 `isolate('shell')` 子树里解析 `ctx.shell` | **已由集成测试验证**：同一 agent 子树内的 `tool-bash` 拿到的是 `GitBashExecutor`，命令实际跑在 Git Bash 上（`uname -s` → `MINGW64_NT-…`） |
-| V3 | client 半区设置行 | **已完成**：`src/client/` 注册 `settings.general.item`（id `terminal-tool`，order 60），含胶囊切换、路径输入/下拉、「自动发现」按钮；两条只读 `/api` 路由由 `src/routes.ts` 提供 |
+| V3 | client 半区设置行 | **已完成**：`src/client/` 注册 `settings.general.item`（id `terminal-tool`，order 60）；终端的枚举选择是官方下拉 + `Menu`，路径是官方 `Input`（多候选时同一套下拉），「自动发现」是官方 outline `Button`；两条 `/api` 路由由 `src/routes.ts` 提供 |
+| V4 | 设置行能否直接复用官方 UI atoms | **已验证**：`@deepseek-ai/dsh-client-ui-primitives` 由 Web shell 以 `PLATFORM_MODULES` 播种，client bundle 保持 external（contractcheck / clientsmoke 断言）；jsdom 渲染测试用 `scripts/primitives-double.mjs` 行为级替身，按 role/aria 断言 |
 
 ### 12.1 编码期发现的、与设计稿的差异（已按实际实现修正）
 
@@ -427,3 +495,5 @@ dsh-terminal-tool/
 | `restrict({deny:['pwsh']})` 无条件执行 | 名字未知会抛 `tools.restrict() names unknown global tool(s)…` | 先 `tools.get('pwsh', agent)` 探测，缺失则跳过并记 `warn` |
 | 无条件 `systemPrompt.getSectionOrder('tool:pwsh')` | 该 API 的参数是常量名（`TOOL_PWSH`），传 section 名返回 `undefined` | 传 `'TOOL_PWSH'`，并保留 `?? 1010` 回退 |
 | `lib/types/index.d.ts` 手写后 `from './config.ts'` | 发布包里没有 `.ts` 源，类型解析会悬空 | 声明文件内联全部公共类型 |
+| 设置行自绘胶囊按钮 / `<input>` / `<select>`（早期版实现） | 与相邻官方设置项视觉、行为都不一致；官方对枚举偏好统一渲染成下拉 `Menu` | 改用官方 UI atoms（`Button` / `Input` / `Menu` / `IconChevronDownOutlineRegular`）；`styles.ts` 只保留版式 |
+| 「client bundle 不得 import 第一方值模块」（早期对 client purity 约束的理解） | 官方 UI atoms 由 Web shell 的冻结模块表提供，和 `react` 同类，官方 `PreferenceRow` 也是直接引用 | client bundle 正常 `require('@deepseek-ai/dsh-client-ui-primitives')` 并保持 external；其余第一方包仍不得进入 client bundle |

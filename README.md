@@ -4,6 +4,8 @@
 
 设计取向：**一个开关、所有 preset 跟随、不动 preset 文件、不接管全局 `ctx.shell`**。默认 `dialect: pwsh`，装上去什么都不变；改成 `bash` 后，**新会话**拿到 `bash` 工具、`pwsh` 从该会话的工具目录里消失，已开的会话保持原状。
 
+> **临时替代方案**：DSH 目前没有内置的「终端 / Git Bash 选择」能力。**在官方能力落地前，本插件是它的临时替代方案**——用官方已发布的执行器与工具，把 Windows 上新会话的终端换成 Git Bash。**官方提供等价设置后即可停用本插件**：从 profile 依赖里移除本行并重启，新会话即回到官方终端工具。插件不改 DSH 安装目录、不改任何 preset、不接管全局 `ctx.shell`，配置只写进当前 profile 的 patch 层；卸载不需要清理任何全局状态。
+
 ---
 
 ## 为什么要这个插件
@@ -55,7 +57,7 @@ DSH 0.2.1-rc.2 的平台组合在 Windows 上是互斥的：
    ```
    四步都登记在 `agentCtx` 上，会话结束由 cordis 逆序释放；中途失败则逆序回滚，会话退化为原样。
 
-4. **配置**：所有字段 `.volatile()`，Host 侧由 `dsh-settings` 投影成可写 namespace；**客户端半区**（`lib/client.js`）再用官方 `configForms` 服务把同一份值渲染成 **设置 → 通用 → 终端工具** 的一行，写回仍落在 profile 的 patch 层。不加客户端半区时，Host 侧值虽然可写，但设置页里没有任何 UI 入口。
+4. **配置与设置行**：所有字段 `.volatile()`，同一份 entry Config 由 Host 交给官方 `configForms` 服务；**客户端半区**（`lib/client.js`）把它渲染成 **设置 → 通用 → 终端工具** 的一行，写回仍落在 profile 的 patch 层。行内控件全部复用官方 `@deepseek-ai/dsh-client-ui-primitives` 的 `Button` / `Input` / `Menu` / `IconChevronDownOutlineRegular`，外观与相邻的官方设置项同源；该包只作为 devDependency 提供类型，运行时由 Web shell 的冻结模块表（`PLATFORM_MODULES`）播种，bundle 像 `require('react')` 一样 `require()` 它，插件不在运行时安装任何依赖。
 
 ### 关键设计约束（为什么不那么做）
 
@@ -71,7 +73,8 @@ DSH 0.2.1-rc.2 的平台组合在 Windows 上是互斥的：
 
 ### 前置条件
 
-- Windows + DSH Desktop 0.2.1-rc.2 及以上（本插件在该版本上开发与验证）
+- Windows + DSH Desktop `>=0.2.1-rc.2 <0.3.0`（`package.json` 的 `engines.dsh` 范围；本插件在此范围内开发与验证）
+- **Web shell 自带 `@deepseek-ai/dsh-client-ui-primitives`**：0.2.1-rc.2 起该包由 Web shell 的冻结模块表（`PLATFORM_MODULES`）播种，插件设置行的 bundle 像 `require('react')` 一样 `require()` 它，不会内联第二份 atoms。宿主升级到范围外时设置行可能加载失败，但 Host 半区的替换逻辑不依赖这张模块表
 - 本机已装 Git for Windows（或 MSYS2 / Cygwin）
 - 想用受限沙箱的话，见下面「已知限制」第 3 条
 
@@ -82,7 +85,7 @@ DSH 0.2.1-rc.2 的平台组合在 Windows 上是互斥的：
 git clone https://github.com/road-kid/dsh-terminal-tool.git
 cd dsh-terminal-tool
 npm install
-npm run check        # typecheck + build + contractcheck + selftest + integration
+npm run check        # typecheck → build → contractcheck → clientsmoke → selftest → rowselftest → rendertest → integration
 
 # 2. 装进 profile（本机 profile 为 desktop）
 #    用插件管理器从本地目录安装：
@@ -105,28 +108,31 @@ npm pack
 
 ### 启用
 
-重启后打开 **设置 → 通用**，底部会多出一行 **终端工具**（客户端半区注册的 `settings.general.item` 行）：
+重启后打开 **设置 → 通用**，底部会多出一行 **终端工具**（客户端半区注册的 `settings.general.item` 行，id `terminal-tool`，order 60）：
 
 ```
-终端工具
-[PowerShell（pwsh）] [Git Bash（bash）]
-Git Bash 路径  [__________________________]  [自动发现]
-更改对新会话生效（运行中的会话保持启动时的选择）。
+终端工具                                     [Git Bash（bash） ▾]
+模型执行命令时使用的终端；改动只影响新会话。
+Git Bash 路径                    [C:/Program Files/Git/bin/bash.exe]  [自动发现]
 ```
 
-- 两枚胶囊按钮切换 `dialect`，**默认 `pwsh`**：装插件本身不改变任何行为。
-- 选 `bash` 后才出现路径行。「自动发现」会扫一遍本机 Git Bash，把可用路径持久化进 `bashCandidates`；候选多于一条时输入框变成下拉。
+（上面是选中 `bash` 后的样子；默认 `pwsh` 时没有第二行。）
+
+- **版式与官方 General 段设置行一致**：两列，左侧标题（14px/20px）+ 一句说明（12px/18px），右侧控件；24px 列间距、16px 纵向内边距、`.5px` 底部分隔线（`--dsw-alias-border-l2`）。颜色全部取 `--dsw-alias-*` 设计变量，跟随主题。
+- **终端类型**是一枚官方下拉触发器（36px、`--dsw-radius-md`、`--dsw-alias-bg-module-platform`、chevron），点开是官方 `Menu`——与官方段里所有枚举型偏好的渲染方式相同。**默认 `pwsh`**：装插件本身不改变任何行为。
+- 选 `bash` 后才出现路径行。路径默认是官方 `Input`，直接填 `bash.exe` 的完整路径；「自动发现」命中多于一条时，输入框换成同一套下拉，列出全部可用路径。路径为空时有提示；扫描中按钮文案变为「正在扫描…」，扫不到会明确提示，而不是清空输入。
 - 已经选好的路径**不会**被后续扫描改写（除非它已失效）。
-- 挂载时**不扫描、不写配置**：扫描只在点「自动发现」时发生，`/state` 只读配置。
+- **挂载时不扫描、不写配置**：扫描只在点「自动发现」时发生，并把选中的 `bashPath` 与可用列表 `bashCandidates` 原子写回；`/state` 只读配置，所以打开设置是瞬时的。运行中的会话保持启动时的终端类型——这是 DSH 的装配语义。
+- 能力或设置服务不可用时行内会说明原因（例如「当前 DSH 版本不支持自动切换：{reason}」）；配置只读时所有控件禁用。非 Windows 上整行不渲染。
 
-设置行通过两条只读 `/api` 路由取数（写入仍走 `configForms`，落 profile patch 层）：
+设置行通过两条 `/api` 路由（都不写配置；写入仍走 `configForms`，落 profile patch 层）：
 
 | 路由 | 作用 |
 |---|---|
 | `POST /api/dsh-terminal-tool/state` | 平台、设置可用性、当前值、能力探测。**不扫描**，所以打开设置是瞬时的 |
 | `POST /api/dsh-terminal-tool/discover` | 用户点「自动发现」时才调用，返回全部可用候选 |
 
-Config 字段（设置行只暴露前三个；其余仍可直接写 profile patch）：
+Config 字段（设置行直接编辑 `dialect` 与 `bashPath`；点「自动发现」会原子写回 `bashPath` + `bashCandidates`；其余字段仍可直接写 profile patch）：
 
 | 字段 | 说明 |
 |---|---|
@@ -212,6 +218,7 @@ Config 字段（设置行只暴露前三个；其余仍可直接写 profile patc
 5. **`cmd /c` 会被 MSYS 参数改写**，需写 `cmd //c` 或设 `MSYS2_ARG_CONV_EXCL='*'`。
 6. **首次安装必须重启 DSH**（理由见「安装」）。
 7. **`minimal` preset 的持久 shell 会退化为一次性 shell**。持久终端由 `dsh-terminal-bash` 后端提供，本插件只替换一次性 `bash` 工具。
+8. **宿主版本范围 `>=0.2.1-rc.2 <0.3.0`**。设置行依赖 Web shell 自带的官方 UI atoms 模块表；宿主大版本变更后需重新验证。
 
 ---
 
@@ -227,23 +234,23 @@ src/replace.ts    每会话替换 + 逆序回滚
 src/diag.ts       诊断日志
 src/types.ts      共享类型
 src/shared/protocol.ts  Host/客户端共享的线路协议（路由路径、常量、视图类型）
-src/routes.ts      两条只读 /api 路由：/state 与 /discover
+src/routes.ts      两条 /api 路由：/state 与 /discover（都不写配置）
 src/client/        客户端半区：设置 → 通用 的「终端工具」行
-                  index.ts 注册 settings.general.item；row.tsx 是行组件；
-                  store.ts 是状态机（自动发现、写回、错误）；api.ts 取数
+                  index.ts 注册 settings.general.item；row.tsx 是行组件（官方 UI atoms）；
+                  store.ts 是状态机（自动发现、写回、错误）；api.ts 取数；styles.ts 只放版式
 src/testing.ts     仅测试用的第二入口（不发布）
 ```
 
 ```powershell
-npm run typecheck     # tsc --noEmit（devDeps 钉 0.2.1-rc.2 真 .d.ts）
-npm run build         # esbuild → lib/index.js（Host ESM）+ lib/client.js（客户端半区，react 保持 external）
-npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / 客户端半区装载形状 / bundle 未内联第一方
-npm run clientsmoke   # 真实执行 lib/client.js：模块装载形状、apply 注册行、无 configForms 时降级、迟到服务替换、HMR 幂等（8 项）
+npm run typecheck     # tsc --noEmit（devDeps 钉 0.2.1-rc.2 真 .d.ts，含官方 UI atoms 类型）
+npm run build         # esbuild → lib/index.js（Host ESM）+ lib/client.js（客户端半区；react 与官方 UI atoms 均保持 external）
+npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / 客户端半区装载形状 / bundle 未内联第一方 / atom specifier 保持 external（15 项）
+npm run clientsmoke   # 真实执行 lib/client.js：模块装载形状、react 与 atom external、apply 注册行、无 configForms 时降级、迟到服务替换、HMR 幂等（8 项）
 npm run rowselftest   # 行状态机 13 项：/state 读取、乐观写入、自动发现持久化、各类失败提示
-npm run rendertest    # 在 jsdom 里真实渲染并点击：标题/胶囊/路径行/自动发现变下拉（9 项）
+npm run rendertest    # 在 jsdom 里真实渲染并点击：按 role/aria 断言下拉触发器、菜单项与路径 Input（9 项；官方 atoms 由 scripts/primitives-double.mjs 顶替）
 npm run selftest      # 路径、发现、快照、/api 路由注册 28 项
 npm run integration   # 在真实第一方服务上跑完整替换流程（5 项）
-npm run check         # 以上全部，一条命令
+npm run check         # typecheck → build → contractcheck → clientsmoke → selftest → rowselftest → rendertest → integration
 ```
 
 设计文档见 [`docs/DESIGN.md`](docs/DESIGN.md)：能力清单、模块划分、决策理由、偏离项与待验证项。

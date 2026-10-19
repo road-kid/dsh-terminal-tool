@@ -1,34 +1,47 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactElement } from 'react'
+import {
+  Button,
+  IconChevronDownOutlineRegular,
+  Input,
+  Menu,
+} from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import { createRowController, knownPaths, type RowController, type RowState } from './store.ts'
+import { createRowController, knownPaths, type Dialect, type RowController, type RowState } from './store.ts'
 import { injectStyles } from './styles.ts'
 import type { RowProps } from './types.ts'
 
 /**
  * The 设置 → 通用 → 终端工具 row.
  *
- * Shape (matching the official rows around it, and the reference plugin):
+ * Shape, copied from the two official row types that surround it in the General
+ * section:
  *
  * ```
- * 终端工具
- * [PowerShell（pwsh）] [Git Bash（bash）]
- * Git Bash 路径  [input | select]  [自动发现]
- * 更改对新会话生效（运行中的会话保持启动时的选择）。
+ * 终端工具                                        [PowerShell（pwsh） ▾]
+ * 模型执行命令时使用的终端；改动只影响新会话。
+ * Git Bash 路径                                   [C:/…/bash.exe     ▾] [自动发现]
  * ```
+ *
+ * Every control is an official `@deepseek-ai/dsh-client-ui-primitives`
+ * component, so buttons, the dropdown trigger, the menu card and its rows are
+ * pixel-identical to the neighbouring settings: `Menu` for both enumerated
+ * choices (the section renders *every* enumerated preference as a dropdown),
+ * `Input` for a hand-typed path, `Button` for 自动发现. This file only owns
+ * layout, copy and the two-column row skeleton.
  *
  * Deliberate choices:
  *
- * - **Both chips are always clickable.** Disabling "Git Bash" until a path has
- *   been found reads as a broken control; choosing bash first and pressing
- *   自动发现 afterwards is the natural order.
- * - **No candidate list is rendered.** The path control *is* the picker: it
- *   becomes a `<select>` once the sweep found more than one bash.
  * - **Nothing renders until the platform is known** (`status !== 'ready'`
  *   returns null), otherwise the row flashes in and then disappears on Linux.
+ * - **No candidate list is rendered.** The path control *is* the picker: it
+ *   becomes a dropdown once the sweep found more than one bash.
+ * - **The input is uncontrolled between commits** so a settings round trip
+ *   cannot eat keystrokes.
  */
 
-/** Id of the path control, used by the `<label htmlFor>`. */
+/** Id of the path control, used by the visible label. */
 const PATH_CONTROL_ID = 'dsh-terminal-tool-path'
 
 /** Follow one store field. */
@@ -36,23 +49,55 @@ function useStoreState(controller: RowController): RowState {
   return useSyncExternalStore(controller.store.subscribe, controller.store.getState)
 }
 
-/** One dialect chip. */
-function Chip(props: {
+/**
+ * One official dropdown: a `PreferenceRow`-style trigger plus a `Menu` card.
+ *
+ * @param props.value - text shown in the trigger.
+ * @param props.items - the menu rows.
+ * @param props.selectedId - row drawn as selected.
+ * @param props.label - accessible name of the trigger.
+ * @param props.disabled - whether the trigger refuses input.
+ * @param props.className - layout class on the menu's anchor wrapper.
+ * @param props.onSelect - called with the id of the chosen row.
+ */
+function Selector(props: {
+  readonly value: string
+  readonly items: readonly MenuEntry[]
+  readonly selectedId: string
   readonly label: string
-  readonly selected: boolean
   readonly disabled: boolean
-  readonly onClick: () => void
+  readonly className: string
+  readonly onSelect: (id: string) => void
 }): ReactElement {
+  const [open, setOpen] = useState(false)
   return (
-    <button
-      type="button"
-      className={props.selected ? 'tterm-chip tterm-chip-on' : 'tterm-chip'}
-      aria-pressed={props.selected}
-      disabled={props.disabled}
-      onClick={props.onClick}
-    >
-      {props.label}
-    </button>
+    <Menu
+      open={open}
+      onClose={() => setOpen(false)}
+      items={props.items}
+      selectedId={props.selectedId}
+      onSelect={(id) => {
+        setOpen(false)
+        props.onSelect(id)
+      }}
+      align="end"
+      portal
+      className={props.className}
+      anchor={
+        <button
+          type="button"
+          className="tterm-selector"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={props.label}
+          disabled={props.disabled}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <span className="tterm-selector-value">{props.value}</span>
+          <IconChevronDownOutlineRegular className="tterm-chevron" />
+        </button>
+      }
+    />
   )
 }
 
@@ -61,9 +106,8 @@ export function TerminalToolRow({ t, form }: RowProps): ReactElement | null {
   const [controller] = useState(() => createRowController(form, t))
   const state = useStoreState(controller)
 
-  // The input is uncontrolled between commits: a round trip must not eat
-  // keystrokes, so the draft lives in component state and is pushed on blur or
-  // Enter. `key` on the input below re-seeds it when the Host value changes.
+  // The path draft lives in component state and is pushed on blur or Enter; the
+  // effect below re-seeds it whenever the Host value changes.
   const [draft, setDraft] = useState(state.bashPath)
   const started = useRef(false)
 
@@ -86,6 +130,7 @@ export function TerminalToolRow({ t, form }: RowProps): ReactElement | null {
   if (state.status !== 'ready') return null
 
   const controlsEnabled = state.writable && state.supported && !state.saving && !state.discovering
+  const dialect: Dialect = state.dialect === 'bash' ? 'bash' : 'pwsh'
   const bashPath = state.bashPath.trim()
   const paths = knownPaths(state)
 
@@ -96,91 +141,91 @@ export function TerminalToolRow({ t, form }: RowProps): ReactElement | null {
     controller.setBashPath(next)
   }
 
+  const dialectItems: readonly MenuEntry[] = [
+    { id: 'pwsh', label: t('row.dialect.pwsh') },
+    { id: 'bash', label: t('row.dialect.bash') },
+  ]
+  const pathItems: readonly MenuEntry[] = paths.map((path) => ({ id: path, label: path }))
+
   return (
     <div className="tterm-group" data-dsh-terminal-tool="row">
-      <div className="tterm-title">{t('row.title')}</div>
-
       <div className="tterm-row">
-        <Chip
-          label={t('row.dialect.pwsh')}
-          selected={state.dialect !== 'bash'}
+        <div className="tterm-text">
+          <div className="tterm-title">{t('row.title')}</div>
+          <div className="tterm-description">{t('row.description')}</div>
+          {state.supported ? null : (
+            <div className="tterm-hint">{t('row.notSupported', { reason: state.unsupportedReason ?? '' })}</div>
+          )}
+          {state.settingsAvailable ? null : <div className="tterm-hint">{t('row.unavailable')}</div>}
+          {state.notice === undefined ? null : <div className="tterm-hint">{state.notice}</div>}
+          {state.error === undefined ? null : (
+            <div className="tterm-error" role="alert">
+              {state.error}
+            </div>
+          )}
+        </div>
+
+        <Selector
+          className="tterm-dialect"
+          label={t('row.dialect.label')}
+          value={t(dialect === 'bash' ? 'row.dialect.bash' : 'row.dialect.pwsh')}
+          items={dialectItems}
+          selectedId={dialect}
           disabled={!controlsEnabled}
-          onClick={() => {
-            if (state.dialect !== 'pwsh') controller.setDialect('pwsh')
-          }}
-        />
-        <Chip
-          label={t('row.dialect.bash')}
-          selected={state.dialect === 'bash'}
-          disabled={!controlsEnabled}
-          onClick={() => {
-            if (state.dialect !== 'bash') controller.setDialect('bash')
+          onSelect={(id) => {
+            const next: Dialect = id === 'bash' ? 'bash' : 'pwsh'
+            if (next !== dialect) controller.setDialect(next)
           }}
         />
       </div>
 
-      {state.dialect === 'bash' ? (
+      {dialect === 'bash' ? (
         <div className="tterm-row">
-          <label className="tterm-note" htmlFor={PATH_CONTROL_ID}>
-            {t('row.path.label')}
-          </label>
-          {paths.length > 1 ? (
-            <select
-              id={PATH_CONTROL_ID}
-              className="tterm-input"
-              value={bashPath}
-              disabled={!controlsEnabled}
-              onChange={(event) => controller.setBashPath(event.target.value)}
-            >
-              {bashPath === '' ? <option value="">{t('row.path.none')}</option> : null}
-              {paths.map((path) => (
-                <option key={path} value={path}>
-                  {path}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              id={PATH_CONTROL_ID}
-              className="tterm-input"
-              type="text"
-              spellCheck={false}
-              autoComplete="off"
-              placeholder={t('row.path.placeholder')}
-              value={draft}
-              disabled={!controlsEnabled}
-              onChange={(event) => setDraft(event.target.value)}
-              onBlur={commitPath}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  commitPath()
-                }
-              }}
-            />
-          )}
-          <button
-            type="button"
-            className="tterm-button"
-            disabled={!controlsEnabled}
-            onClick={() => controller.discover()}
-          >
-            {state.discovering ? t('row.discovering') : t('row.discover')}
-          </button>
+          <div className="tterm-text">
+            <div className="tterm-field-label">{t('row.path.label')}</div>
+            {bashPath === '' ? <div className="tterm-hint">{t('row.path.missing')}</div> : null}
+          </div>
+
+          <div className="tterm-path-control">
+            {paths.length > 1 ? (
+              <Selector
+                className="tterm-path-selector"
+                label={t('row.path.label')}
+                value={bashPath === '' ? t('row.path.none') : bashPath}
+                items={pathItems}
+                selectedId={bashPath}
+                disabled={!controlsEnabled}
+                onSelect={(path) => {
+                  if (path !== bashPath) controller.setBashPath(path)
+                }}
+              />
+            ) : (
+              <Input
+                id={PATH_CONTROL_ID}
+                className="tterm-path-input"
+                type="text"
+                spellCheck={false}
+                autoComplete="off"
+                aria-label={t('row.path.label')}
+                placeholder={t('row.path.placeholder')}
+                value={draft}
+                disabled={!controlsEnabled}
+                onChange={(event) => setDraft(event.target.value)}
+                onBlur={commitPath}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    commitPath()
+                  }
+                }}
+              />
+            )}
+            <Button variant="outline" size="sm" disabled={!controlsEnabled} onClick={() => controller.discover()}>
+              {state.discovering ? t('row.discovering') : t('row.discover')}
+            </Button>
+          </div>
         </div>
       ) : null}
-
-      {state.dialect === 'bash' && bashPath === '' ? <div className="tterm-note">{t('row.path.missing')}</div> : null}
-      {state.supported ? null : (
-        <div className="tterm-note">
-          {t('row.notSupported', { reason: state.unsupportedReason ?? '' })}
-        </div>
-      )}
-      {state.settingsAvailable ? null : <div className="tterm-note">{t('row.unavailable')}</div>}
-      {state.notice === undefined ? null : <div className="tterm-note">{state.notice}</div>}
-      {state.error === undefined ? null : <div className="tterm-error">{state.error}</div>}
-
-      <div className="tterm-note">{t('row.newSession')}</div>
     </div>
   )
 }

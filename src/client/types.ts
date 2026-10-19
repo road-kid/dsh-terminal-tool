@@ -1,11 +1,13 @@
 /**
  * Structural contracts for the client half.
  *
- * Everything here is *shaped*, not imported: the browser bundle must not import
- * first-party value modules (the client purity gate forbids cross-plugin value
- * imports), and typing the cordis services structurally keeps this package
- * independent of their internal declaration layout. Each interface lists only
- * what this plugin actually calls.
+ * Everything here is *shaped*, not imported: typing the cordis services
+ * structurally keeps this package independent of their internal declaration
+ * layout, and each interface lists only what this plugin actually calls. (The
+ * one first-party import in the bundle is the official UI atoms — the Web shell
+ * seeds `@deepseek-ai/dsh-client-ui-primitives` into its frozen module table, so
+ * requiring it costs nothing and yields the official button/input/menu markup.
+ * Every other cross-plugin value import stays forbidden.)
  */
 
 /** A snapshot of the settings form, as the first-party `configForms` reports it. */

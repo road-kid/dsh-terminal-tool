@@ -69,28 +69,54 @@ await test('client bundle has the module-loader script shape', async () => {
   assert.match(source, /return module\.exports; \} \}\);?\s*(\/\/# sourceMappingURL=.*)?$/m)
 })
 
-await test('client bundle keeps react external and registers the General row', async () => {
+await test('client bundle keeps react and the official atoms external', async () => {
   const source = await readFile(join(root, 'lib', 'client.js'), 'utf8')
   assert.match(source, /require\("react"\)/)
   assert.match(source, /require\("react\/jsx-runtime"\)/)
+  // The atoms come from the shell's frozen module table: bundling them would
+  // ship a second copy whose CSS-module class names the page never styles.
+  assert.match(source, /require\("@deepseek-ai\/dsh-client-ui-primitives"\)/)
   assert.match(source, /settings\.general\.item/)
   assert.match(source, /configForms/)
   // A bundled React would duplicate the page's hook dispatcher.
   assert.doesNotMatch(source, /react\.production|react\.development/)
 })
 
-// The row has to look like every other General row: chips for the dialect, a
-// path control and an "Auto-detect" button that scans on click. The class names
-// are the contract with `ROW_CSS`, and the routes are the contract with the
-// host half — if either drifts, the UI silently stops working.
-await test('client bundle ships the terminal-tool row markup and routes', async () => {
+// The row has to look like every other General row: one structured row per
+// setting, an official dropdown for the enumerated choice, an official input and
+// button for the hand-typed path. The class names are the contract with the
+// injected sheet, and the locale keys are the contract with the copy; if either
+// drifts the UI silently loses its layout or its text.
+await test('client bundle ships the terminal-tool row markup, copy and routes', async () => {
   const source = await readFile(join(root, 'lib', 'client.js'), 'utf8')
-  for (const className of ['tterm-group', 'tterm-title', 'tterm-chip', 'tterm-input', 'tterm-button', 'tterm-note']) {
+  for (const className of [
+    'tterm-group',
+    'tterm-row',
+    'tterm-text',
+    'tterm-title',
+    'tterm-description',
+    'tterm-hint',
+    'tterm-selector',
+    'tterm-selector-value',
+    'tterm-chevron',
+    'tterm-path-control',
+    'tterm-path-input',
+    'tterm-field-label',
+  ]) {
     assert.match(source, new RegExp(`["'\`]${className}["'\`]`), `${className} is applied`)
   }
-  assert.match(source, /row\.discover/)
-  assert.match(source, /row\.path\.missing/)
-  assert.match(source, /row\.newSession/)
+  for (const key of [
+    'row.title',
+    'row.description',
+    'row.dialect.label',
+    'row.dialect.pwsh',
+    'row.dialect.bash',
+    'row.path.label',
+    'row.path.missing',
+    'row.discover',
+  ]) {
+    assert.match(source, new RegExp(`["'\`]${key}["'\`]`), `${key} is used`)
+  }
   assert.match(source, /\/api\/dsh-terminal-tool\/state/)
   assert.match(source, /\/api\/dsh-terminal-tool\/discover/)
 })

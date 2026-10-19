@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Terminal Tool",
-    "description": "Choose Git Bash instead of PowerShell for the model's terminal tool. Writes a per-session bash tool backed by the real Git Bash, removes pwsh from that session, and keeps every preset unchanged."
+    "description": "Choose the terminal the model runs commands in — PowerShell or the local Git Bash — for new sessions."
   }
 }

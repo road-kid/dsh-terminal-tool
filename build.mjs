@@ -20,6 +20,14 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(fileURLToPath(import.meta.url))
 const outdir = join(root, 'lib')
 
+/**
+ * The official UI atoms (`Button`, `Menu`, `Input`, ...). The Web shell seeds
+ * them into its frozen module table (`PLATFORM_MODULES`), so a plugin bundle
+ * requires them exactly like `react` instead of bundling a second copy — a copy
+ * would also duplicate the CSS-module class names the shell's stylesheet skins.
+ */
+const PRIMITIVES = '@deepseek-ai/dsh-client-ui-primitives'
+
 const external = [
   '@deepseek-ai/cordis',
   '@deepseek-ai/schemastery',
@@ -78,7 +86,7 @@ await build({
   target: 'es2022',
   jsx: 'automatic',
   sourcemap: true,
-  external: ['react', 'react/jsx-runtime'],
+  external: ['react', 'react/jsx-runtime', PRIMITIVES],
   banner: {
     js: 'window.__ModuleLoader__.load({ id: "dsh-terminal-tool", factory: (require) => {\nvar module = { exports: {} }; var exports = module.exports;',
   },

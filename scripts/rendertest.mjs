@@ -5,11 +5,15 @@
  * covers the registration contract, but neither renders JSX. This script loads
  * `lib/client.js` exactly as the page does (`window.__ModuleLoader__.load`),
  * calls `apply()` on a stub context, then mounts the registered component with
- * React 18 in jsdom and clicks through it.
+ * React 18 in jsdom and drives it through the official controls.
  *
  * It catches the class of bug the other two cannot: a hook order error, a
  * missing `useEffect`, a control that never appears, an `onChange` wired to the
  * wrong handler.
+ *
+ * The official atoms come from `scripts/primitives-double.mjs`: the shipped
+ * bundle requires them from the Web shell's module table, which a Node process
+ * does not have.
  *
  * Run with `npm run rendertest`. Needs `react`, `react-dom` and `jsdom`, which
  * are devDependencies only: the shipped bundle keeps react external.
@@ -21,7 +25,12 @@ import { createRequire } from 'node:module'
 
 import { JSDOM } from 'jsdom'
 
+import { primitivesStub } from './primitives-double.mjs'
+
 const require = createRequire(import.meta.url)
+
+/** The module the shell seeds and the bundle requires instead of bundling. */
+const PRIMITIVES = '@deepseek-ai/dsh-client-ui-primitives'
 
 let passed = 0
 let failed = 0
@@ -61,6 +70,8 @@ const React = require('react')
 const { createRoot } = require('react-dom/client')
 const act = React.act
 
+const primitives = primitivesStub(React)
+
 /** Let effects and microtasks settle. */
 const settle = () => act(async () => {})
 
@@ -84,12 +95,18 @@ function loadBundle() {
       },
     },
   }
+  const required = []
+  const resolve = (specifier) => {
+    required.push(specifier)
+    if (specifier === PRIMITIVES) return primitives
+    return require(specifier)
+  }
   // The bundle is a classic script: run it with `window` bound to our stub and a
   // `require` that resolves react from node_modules (the page seeds the same two
   // modules).
-  new Function('window', 'require', source)(windowStub, require)
+  new Function('window', 'require', source)(windowStub, resolve)
   assert.ok(captured, 'the bundle called __ModuleLoader__.load')
-  return { id: captured.id, exports: captured.factory(require) }
+  return { id: captured.id, exports: captured.factory(resolve), required }
 }
 
 // --- stub context ----------------------------------------------------------
@@ -159,12 +176,13 @@ function mountRow({ form, state, discover }) {
     return new Response(JSON.stringify(state), { status: 200 })
   }
 
-  loadBundle().exports.apply(ctx)
+  const loaded = loadBundle()
+  loaded.exports.apply(ctx)
   assert.equal(calls.registered.length, 1, 'exactly one row registered')
   const { options, component } = calls.registered[0]
   // The slot host builds the component's props from the registration's
   // `inject()` face — that is where the bound translate and the form come from.
-  return { component, props: options.inject() }
+  return { component, props: options.inject(), required: loaded.required }
 }
 
 const READY_STATE = {
@@ -188,7 +206,16 @@ async function render(Component, props) {
   return {
     host,
     text: () => host.textContent ?? '',
+    /** A button by its visible label. */
     button: (label) => [...host.querySelectorAll('button')].find((node) => node.textContent?.includes(label)),
+    /** The dropdown trigger carrying an accessible name. */
+    trigger: (name) => host.querySelector(`button[aria-haspopup="menu"][aria-label="${name}"]`),
+    /** Every dropdown trigger in the row. */
+    triggers: () => [...host.querySelectorAll('button[aria-haspopup="menu"]')],
+    /** The open menu card, if any. */
+    menu: () => host.querySelector('[role="menu"]'),
+    /** The rows of the open menu. */
+    menuItems: () => [...host.querySelectorAll('[role="menu"] [role="menuitem"]')],
     root,
     async unmount() {
       await act(async () => {
@@ -199,71 +226,85 @@ async function render(Component, props) {
   }
 }
 
+/** Click one element inside `act`. */
+async function click(node) {
+  assert.ok(node, 'the element to click exists')
+  await act(async () => {
+    node.click()
+  })
+  await settle()
+}
+
 // --- tests -----------------------------------------------------------------
 
-await test('the row renders the title, both chips and the footer note', async () => {
+await test('the row ships the title, one sentence of description and the dialect dropdown', async () => {
   const form = formStub({ dialect: 'pwsh', bashPath: '', bashCandidates: [] })
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
   const view = await render(row.component, row.props)
   try {
     const text = view.text()
     assert.match(text, /终端工具/)
-    assert.match(text, /PowerShell（pwsh）/)
-    assert.match(text, /Git Bash（bash）/)
-    assert.match(text, /更改对新会话生效/)
+    assert.match(text, /模型执行命令时使用的终端；改动只影响新会话。/)
+    // One control only: the dialect dropdown, showing the current value.
+    assert.equal(view.triggers().length, 1, 'exactly one dropdown on the pwsh row')
+    assert.match(view.trigger('终端类型').textContent ?? '', /PowerShell（pwsh）/)
     // The path row is bash-only.
     assert.doesNotMatch(text, /自动发现/)
     assert.doesNotMatch(text, /Git Bash 路径/)
+    assert.deepEqual(form.mutations, [], 'mounting never writes')
   } finally {
     await view.unmount()
   }
 })
 
-await test('the pwsh chip starts selected and bash is not', async () => {
+await test('the dialect menu lists both kinds and marks the current one', async () => {
   const form = formStub({ dialect: 'pwsh', bashPath: '', bashCandidates: [] })
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
   const view = await render(row.component, row.props)
   try {
-    const chips = [...view.host.querySelectorAll('.tterm-chip')]
-    assert.equal(chips.length, 2)
-    assert.equal(chips[0].getAttribute('aria-pressed'), 'true')
-    assert.equal(chips[1].getAttribute('aria-pressed'), 'false')
-    assert.ok(chips[0].className.includes('tterm-chip-on'))
+    assert.equal(view.menu(), null, 'the menu starts closed')
+    await click(view.trigger('终端类型'))
+    assert.deepEqual(
+      view.menuItems().map((item) => item.textContent),
+      ['PowerShell（pwsh）', 'Git Bash（bash）'],
+    )
+    assert.deepEqual(
+      view.menuItems().map((item) => item.getAttribute('aria-selected')),
+      ['true', 'false'],
+    )
   } finally {
     await view.unmount()
   }
 })
 
-await test('clicking the bash chip reveals the path row and writes dialect', async () => {
+await test('choosing Git Bash reveals the path row and writes the dialect', async () => {
   const form = formStub({ dialect: 'pwsh', bashPath: '', bashCandidates: [] })
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
   const view = await render(row.component, row.props)
   try {
-    const bash = view.button('Git Bash（bash）')
-    assert.ok(bash, 'bash chip exists')
-    await act(async () => {
-      bash.click()
-    })
-    await settle()
+    await click(view.trigger('终端类型'))
+    await click(view.menuItems()[1])
     assert.match(view.text(), /Git Bash 路径/)
     assert.ok(view.button('自动发现'), 'the Auto-detect button appears with the path row')
-    assert.deepEqual(form.mutations, [[{ op: 'set', path: ['dialect'], value: 'bash' }]])
     // A missing path explains itself.
-    assert.match(view.text(), /还没选 Git Bash 路径/)
+    assert.match(view.text(), /点「自动发现」扫描本机/)
+    assert.deepEqual(form.mutations, [[{ op: 'set', path: ['dialect'], value: 'bash' }]])
+    assert.equal(view.menu(), null, 'the menu closes after a choice')
   } finally {
     await view.unmount()
   }
 })
 
-await test('a bash row with one path shows a text input, not a select', async () => {
+await test('a bash row with at most one known path types it into an Input', async () => {
   const form = formStub({ dialect: 'bash', bashPath: 'C:\\Git\\bin\\bash.exe', bashCandidates: [] })
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
   const view = await render(row.component, row.props)
   try {
-    const input = view.host.querySelector('.tterm-input')
-    assert.equal(input.tagName, 'INPUT')
+    const input = view.host.querySelector('input[aria-label="Git Bash 路径"]')
+    assert.ok(input, 'the path is a text field')
     assert.equal(input.value, 'C:\\Git\\bin\\bash.exe')
-    assert.doesNotMatch(view.text(), /还没选 Git Bash 路径/)
+    assert.equal(view.triggers().length, 1, 'only the dialect dropdown is a menu')
+    assert.doesNotMatch(view.text(), /点「自动发现」扫描本机/)
   } finally {
     await view.unmount()
   }
@@ -274,7 +315,7 @@ await test('editing the path input and pressing Enter persists it', async () => 
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
   const view = await render(row.component, row.props)
   try {
-    const input = view.host.querySelector('.tterm-input')
+    const input = view.host.querySelector('input[aria-label="Git Bash 路径"]')
     // React tracks the previous value on the node; go through the native setter
     // so it sees the change (the standard jsdom/React workaround).
     const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set
@@ -294,7 +335,7 @@ await test('editing the path input and pressing Enter persists it', async () => 
   }
 })
 
-await test('Auto-detect scans, then the control becomes a select of the hits', async () => {
+await test('Auto-detect scans, then the path control becomes a dropdown of the hits', async () => {
   const form = formStub({ dialect: 'bash', bashPath: '', bashCandidates: [] })
   const row = mountRow({
     form,
@@ -308,18 +349,11 @@ await test('Auto-detect scans, then the control becomes a select of the hits', a
   })
   const view = await render(row.component, row.props)
   try {
-    const button = view.button('自动发现')
-    assert.ok(button, 'Auto-detect is present')
-    await act(async () => {
-      button.click()
-    })
-    await settle()
-    const select = view.host.querySelector('select.tterm-input')
-    assert.ok(select, 'two hits turn the path control into a select')
-    assert.deepEqual(
-      [...select.querySelectorAll('option')].map((option) => option.value),
-      ['C:\\Git\\bin\\bash.exe', 'C:\\MSYS2\\usr\\bin\\bash.exe'],
-    )
+    await click(view.button('自动发现'))
+    // Two hits turn the path control into a dropdown; the dialect one stays.
+    assert.equal(view.triggers().length, 2, 'the path control is now a dropdown too')
+    const trigger = view.trigger('Git Bash 路径')
+    assert.match(trigger.textContent ?? '', /C:\\Git\\bin\\bash\.exe/)
     // The pick and the candidate list are persisted together.
     assert.equal(form.mutations.length, 1)
     assert.deepEqual(form.mutations[0], [
@@ -329,6 +363,16 @@ await test('Auto-detect scans, then the control becomes a select of the hits', a
         path: ['bashCandidates'],
         value: ['C:\\Git\\bin\\bash.exe', 'C:\\MSYS2\\usr\\bin\\bash.exe'],
       },
+    ])
+
+    await click(trigger)
+    assert.deepEqual(
+      view.menuItems().map((item) => item.textContent),
+      ['C:\\Git\\bin\\bash.exe', 'C:\\MSYS2\\usr\\bin\\bash.exe'],
+    )
+    await click(view.menuItems()[1])
+    assert.deepEqual(form.mutations.at(-1), [
+      { op: 'set', path: ['bashPath'], value: 'C:\\MSYS2\\usr\\bin\\bash.exe' },
     ])
   } finally {
     await view.unmount()
@@ -340,18 +384,15 @@ await test('Auto-detect with no hits explains itself instead of clearing the pat
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
   const view = await render(row.component, row.props)
   try {
-    await act(async () => {
-      view.button('自动发现').click()
-    })
-    await settle()
-    assert.match(view.text(), /没有找到任何 Git Bash/)
+    await click(view.button('自动发现'))
+    assert.match(view.text(), /没有找到 Git Bash，请直接填入 bash\.exe 的完整路径。/)
     assert.deepEqual(form.mutations, [])
   } finally {
     await view.unmount()
   }
 })
 
-await test('mounting never writes, and the row is absent off Windows', async () => {
+await test('the row is absent off Windows and mounting it wrote nothing', async () => {
   const form = formStub({ dialect: 'bash', bashPath: 'C:\\Git\\bin\\bash.exe', bashCandidates: [] })
   const row = mountRow({
     form,
@@ -370,15 +411,21 @@ await test('mounting never writes, and the row is absent off Windows', async () 
   }
 })
 
-await test('a read-only form disables the controls', async () => {
-  const form = formStub({ dialect: 'pwsh', bashPath: '', bashCandidates: [] })
-  form.getSnapshot = () => ({ status: 'ready', value: { dialect: 'pwsh', bashPath: '', bashCandidates: [] }, revision: 1, writable: false })
+await test('a read-only form locks the dropdown and the Auto-detect button', async () => {
+  const form = formStub({ dialect: 'bash', bashPath: '', bashCandidates: [] })
+  form.getSnapshot = () => ({
+    status: 'ready',
+    value: { dialect: 'bash', bashPath: '', bashCandidates: [] },
+    revision: 1,
+    writable: false,
+  })
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
   const view = await render(row.component, row.props)
   try {
-    for (const chip of view.host.querySelectorAll('.tterm-chip')) {
-      assert.equal(chip.disabled, true, 'a non-writable form disables the chips')
-    }
+    assert.equal(view.triggers().length, 1)
+    assert.equal(view.trigger('终端类型').disabled, true, 'a non-writable form disables the dropdown')
+    assert.equal(view.button('自动发现').disabled, true, 'and the Auto-detect button')
+    assert.equal(view.host.querySelector('input[aria-label="Git Bash 路径"]').disabled, true)
   } finally {
     await view.unmount()
   }
