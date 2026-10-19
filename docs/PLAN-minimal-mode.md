@@ -598,6 +598,12 @@ profile 已重装至 `0.5.1`；GUI 三选项人工验收待办（见 §14）。
 
 待办（下一轮开始时首先做）：
 
+0. **已完成的无头验收**（dev harness `--profile web`，插件 0.5.1）：
+   `/api/dsh-terminal-tool/state` 在三种模式下分别返回
+   `minimalMode: oneshot / variant / leave`；`variant` 模式下 `variant.status === "registered"`，
+   `leave` 模式下诊断日志出现 `variant: unregistered minimal-gitbash`，且无 `variant: mount failed`。
+   说明预设定义能被注册表挂载（行解析 + isolate 审计通过）。浏览器自动化在本次会话中不稳定，
+   因此「预设选择器里肉眼可见」这一步仍待人工确认。
 1. **GUI 三选项人工验收**（需要登录后的页面；`/api/...` 未带 token 时返回 401）：
    - `oneshot`：新建 `minimal` 会话 → 工具列表是 `bash`（一次性），无 `pwsh`。
    - `leave`：切到该选项后新建 `minimal` 会话 → 工具列表只有持久 `pwsh`，插件不注入。
