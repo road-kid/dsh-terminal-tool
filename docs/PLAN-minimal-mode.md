@@ -1,7 +1,7 @@
 # 设计与实施单：极简模式终端选项（M2 / M3）
 
-- 状态：**M2 已实施（0.5.0）**；M3 未开始（方案见 §11，等下一轮）
-- 目标版本：M2 → `0.5.0`；M3 → `0.6.0`（分两轮，见 §11）
+- 状态：**M2 已实施（0.5.1）**；M3 未开始（方案见 §11，等下一轮）
+- 目标版本：M2 → `0.5.1`（`0.5.0` 为功能版，`0.5.1` 补持久终端测试）；M3 → `0.6.0`（分两轮，见 §11）
 - 关联：M1（受限沙箱策略 `confinedPolicy`，`0.4.1`，commit `2946e3b`）
 - 基线事实：DSH `0.2.1-rc.2`；本插件 `engines.dsh ">=0.2.1-rc.2 <0.3.0"`
 
@@ -553,7 +553,7 @@ M3 不是新功能，**实际意义**是把 M2 里三条「尽力而为」变成
 
 ---
 
-## 13. 实施结果（0.5.0，M2 完成）
+## 13. 实施结果（0.5.1，M2 完成）
 
 决策点按实现落地：
 
@@ -576,5 +576,33 @@ M3 不是新功能，**实际意义**是把 M2 里三条「尽力而为」变成
 - 客户端：`src/client/{types,store,row,locales}.ts(x)` 第 4 行三项下拉与三态提示（`registered` / `retained` / `failed`）。
 - `build.mjs` / `package.json`：第 3 个 esbuild 入口 `lib/pty.js`、`exports['./pty']`、可选 peer `@deepseek-ai/dsh-terminal-bash`、`js-yaml` 依赖。
 
-验收：`npm run check` 全绿（contractcheck 17 / clientsmoke 8 / selftest 51 / rowselftest 15 / rendertest 14 / integration 13）。
-真机三选项验收与 profile 重装由 Lead 在本轮收尾完成。
+补丁（0.5.1，commit `bcde298`）：真机验收脚本暴露 `src/pty.ts` 两个缺陷并已修复——
+`inject` 缺 `sessionProjections`/`workingDirectory`（`ensureSandboxModeFence` 会在 spawn 期抛错）；
+`sandboxPolicy` 曾在 apply 期读一次，改为每次 spawn 时读。新增 `scripts/ptytests.mjs`（4 项真机用例：
+后端注册唯一、ConPTY 起 Git Bash 且 `export` 跨两次发送存活、`fail` 抛 `SANDBOX_UNAVAILABLE`、
+`escalate` 不静默回退），并纳入 `npm run check`。
+
+验收：`npm run check` 全绿（contractcheck 18 / clientsmoke 8 / selftest 51 / rowselftest 15 / rendertest 14 / integration 13 / ptytests 4）。
+profile 已重装至 `0.5.1`；GUI 三选项人工验收待办（见 §14）。
+
+---
+
+## 14. 收尾与待办
+
+已交付（`0.5.1`，commit `bcde298`，已推送）：
+
+- 代码：`src/preset.ts`、`src/pty.ts`、`minimalMode` 配置/协议/客户端第 4 行、`scripts/ptytests.mjs`。
+- 测试：`npm run check` 全绿（18 / 8 / 51 / 15 / 14 / 13 / 4）。
+- 文档：README「极简模式（minimal preset）」、DESIGN §13、本文档 §13。
+- profile：`pnpm update dsh-terminal-tool` → `0.5.1`，`exports['./pty']` 与 `lib/pty.js` 就位；`cordis.patch.yml` 未写 `minimalMode` 键，生效值走默认 `oneshot`。
+
+待办（下一轮开始时首先做）：
+
+1. **GUI 三选项人工验收**（需要登录后的页面；`/api/...` 未带 token 时返回 401）：
+   - `oneshot`：新建 `minimal` 会话 → 工具列表是 `bash`（一次性），无 `pwsh`。
+   - `leave`：切到该选项后新建 `minimal` 会话 → 工具列表只有持久 `pwsh`，插件不注入。
+   - `variant`：切到该选项 → 重开新建会话面板，预设选择器应出现「极简模式 · Git Bash」；
+     选它新建会话 → 工具 `bash` 持久（`export` 跨调用存活）；切回 `oneshot` → 预设消失。
+2. **M3 定义**（见 §11）：注销引用检测精度（空白期 `select()` 只看事件的盲区）、
+   预设名册刷新提示、`@deepseek-ai/dsh-experimental-terminal-bundle` 的 profile patch 接入、
+   报错文案打磨。
