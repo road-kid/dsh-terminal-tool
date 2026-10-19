@@ -10,6 +10,7 @@ import { executorConfig, type ConfigSnapshot } from './config.ts'
 import { GitBashExecutor } from './executor.ts'
 import { bashInstallRoot, bashPathEntries } from './paths.ts'
 import { discoverBash } from './discover.ts'
+import { MINIMAL_ID, VARIANT_ID } from './preset.ts'
 
 /**
  * Per-session replacement.
@@ -54,6 +55,17 @@ function optional<T>(ctx: Context, name: string): T | undefined {
   return ctx.get(name) as T | undefined
 }
 
+/** Session preset of an agent, read from the projection with a header fallback. */
+function presetOf(agentCtx: Context, agent: Agent): string | undefined {
+  const projections = optional<{
+    stateOf(session: unknown, key: string): unknown
+  }>(agentCtx, 'sessionProjections')
+  const projected = projections?.stateOf(agent.session, 'agentPreset')
+  if (typeof projected === 'string') return projected
+  const header = (agent.session as { header?: { agentPreset?: string } }).header
+  return header?.agentPreset
+}
+
 /**
  * Replace one session's terminal tool.
  *
@@ -72,6 +84,22 @@ export async function installSession(
 
   const agentCtx = agent.ctx
   if (agentCtx === undefined) return { status: 'skipped', reason: skip(id, 'no-agent-context') }
+
+  // A preset decides which terminal stack the session gets. Two presets are
+  // left entirely alone here:
+  //
+  // - `minimal-gitbash` (this plugin's variant) already mounts the persistent
+  //   Git Bash backend; adding a one-shot `bash` would collide with it;
+  // - `minimal` under `minimalMode: leave|variant` keeps the official persistent
+  //   terminal (pwsh on Windows) by explicit user choice.
+  //
+  // Read the projection, not the header: switching presets before the first
+  // turn only appends `agent-preset/selected`.
+  const preset = presetOf(agentCtx, agent)
+  if (preset === VARIANT_ID) return { status: 'skipped', reason: skip(id, 'already-replaced') }
+  if (preset === MINIMAL_ID && snapshot.minimalMode !== 'oneshot') {
+    return { status: 'skipped', reason: skip(id, 'minimal-left', snapshot.minimalMode) }
+  }
 
   const tools = optional<ToolRuntime>(agentCtx, 'tools')
   const systemPrompt = optional<SystemPrompt>(agentCtx, 'systemPrompt')

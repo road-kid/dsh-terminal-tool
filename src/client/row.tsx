@@ -12,6 +12,7 @@ import {
   createRowController,
   knownPaths,
   type Dialect,
+  type MinimalMode,
   type RowController,
   type RowState,
 } from './store.ts'
@@ -152,6 +153,11 @@ export function TerminalToolRow({ t, form }: RowProps): ReactElement | null {
     { id: 'escalate', label: t('row.confined.escalate') },
     { id: 'fail', label: t('row.confined.fail') },
   ]
+  const minimalItems: readonly MenuEntry[] = [
+    { id: 'leave', label: t('row.minimal.leave') },
+    { id: 'oneshot', label: t('row.minimal.oneshot') },
+    { id: 'variant', label: t('row.minimal.variant') },
+  ]
 
   return (
     <div className="tterm-group" data-dsh-terminal-tool="row">
@@ -261,6 +267,44 @@ export function TerminalToolRow({ t, form }: RowProps): ReactElement | null {
               }}
             />
           </div>
+
+          {state.supported ? (
+            <div className="tterm-row">
+              <div className="tterm-text">
+                <div className="tterm-field-label">{t('row.minimal.label')}</div>
+                <div className="tterm-description">{t('row.minimal.description')}</div>
+                {state.variant?.status === 'registered' ? (
+                  <div className="tterm-hint" role="note">
+                    {t('row.minimal.variantReady', { id: state.variant.id })}
+                  </div>
+                ) : state.variant?.status === 'retained' ? (
+                  <div className="tterm-hint" role="note">
+                    {t('row.minimal.variantRetained', {
+                      id: state.variant.id,
+                      count: String(state.variant.refs),
+                    })}
+                  </div>
+                ) : state.variant?.status === 'failed' ? (
+                  <div className="tterm-error" role="alert">
+                    {t('row.minimal.variantFailed', { reason: state.variant.reason ?? '' })}
+                  </div>
+                ) : null}
+              </div>
+
+              <Selector
+                className="tterm-dialect"
+                label={t('row.minimal.label')}
+                value={t(`row.minimal.${state.minimalMode}`)}
+                items={minimalItems}
+                selectedId={state.minimalMode}
+                disabled={!controlsEnabled}
+                onSelect={(id) => {
+                  const next: MinimalMode = id === 'leave' ? 'leave' : id === 'variant' ? 'variant' : 'oneshot'
+                  if (next !== state.minimalMode) controller.setMinimalMode(next)
+                }}
+              />
+            </div>
+          ) : null}
         </>
       ) : null}
     </div>

@@ -369,6 +369,75 @@ await test('choosing a confined policy writes it', async () => {
   }
 })
 
+await test('the minimal-mode row offers the three choices and writes one', async () => {
+  const form = formStub({ dialect: 'bash', bashPath: 'C:\Git\bin\bash.exe', bashCandidates: [] })
+  const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
+  const view = await render(row.component, row.props)
+  try {
+    assert.match(view.text(), /极简模式/)
+    assert.match(view.text(), /只影响使用官方「极简模式」预设的会话/)
+    assert.equal(view.trigger('极简模式').textContent ?? '', '换成一次性 bash')
+    await click(view.trigger('极简模式'))
+    assert.deepEqual(
+      view.menuItems().map((item) => item.textContent),
+      ['保持官方持久终端', '换成一次性 bash', '添加 Git Bash 变体'],
+    )
+    await click(view.menuItems()[2])
+    assert.deepEqual(form.mutations, [[{ op: 'set', path: ['minimalMode'], value: 'variant' }]])
+    assert.match(view.trigger('极简模式').textContent ?? '', /添加 Git Bash 变体/)
+  } finally {
+    await view.unmount()
+  }
+})
+
+await test('the minimal-mode row reports the variant lifecycle', async () => {
+  const form = formStub({ dialect: 'bash', bashPath: 'C:\Git\bin\bash.exe', bashCandidates: [] })
+
+  const ready = mountRow({
+    form,
+    state: { ...READY_STATE, minimalMode: 'variant', variant: { status: 'registered', id: 'minimal-gitbash', refs: 0 } },
+    discover: { candidates: [] },
+  })
+  const readyView = await render(ready.component, ready.props)
+  try {
+    assert.match(readyView.text(), /已在预设列表中添加「minimal-gitbash」/)
+  } finally {
+    await readyView.unmount()
+  }
+
+  // A referenced variant is kept rather than removed, and the row says why.
+  const retained = mountRow({
+    form,
+    state: { ...READY_STATE, minimalMode: 'oneshot', variant: { status: 'retained', id: 'minimal-gitbash', refs: 2 } },
+    discover: { candidates: [] },
+  })
+  const retainedView = await render(retained.component, retained.props)
+  try {
+    assert.match(retainedView.text(), /仍有 2 个会话在使用「minimal-gitbash」/)
+    assert.equal(retainedView.host.querySelector('[role="alert"]'), null)
+  } finally {
+    await retainedView.unmount()
+  }
+
+  // A failed registration is an error, not a hint.
+  const failed = mountRow({
+    form,
+    state: {
+      ...READY_STATE,
+      minimalMode: 'variant',
+      variant: { status: 'failed', id: 'minimal-gitbash', refs: 0, reason: 'isolate realms' },
+    },
+    discover: { candidates: [] },
+  })
+  const failedView = await render(failed.component, failed.props)
+  try {
+    assert.match(failedView.text(), /变体注册失败：isolate realms/)
+    assert.ok(failedView.host.querySelector('[role="alert"]'), 'a failed variant is an alert')
+  } finally {
+    await failedView.unmount()
+  }
+})
+
 await test('a bash row with at most one known path types it into an Input', async () => {
   const form = formStub({ dialect: 'bash', bashPath: 'C:\\Git\\bin\\bash.exe', bashCandidates: [] })
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
@@ -377,7 +446,7 @@ await test('a bash row with at most one known path types it into an Input', asyn
     const input = view.host.querySelector('input[aria-label="Git Bash 路径"]')
     assert.ok(input, 'the path is a text field')
     assert.equal(input.value, 'C:\\Git\\bin\\bash.exe')
-    assert.equal(view.triggers().length, 2, 'the dialect and confined dropdowns are menus, the path is an Input')
+    assert.equal(view.triggers().length, 3, 'dialect, confined and minimal are menus; the path is an Input')
     assert.doesNotMatch(view.text(), /点「自动发现」扫描本机/)
   } finally {
     await view.unmount()
@@ -426,7 +495,7 @@ await test('Auto-detect scans, then the path control becomes a dropdown of the h
     await click(view.button('自动发现'))
     // Two hits turn the path control into a dropdown; the dialect and confined
     // ones stay.
-    assert.equal(view.triggers().length, 3, 'the path control is now a dropdown too')
+    assert.equal(view.triggers().length, 4, 'the path control is now a dropdown too')
     const trigger = view.trigger('Git Bash 路径')
     assert.match(trigger.textContent ?? '', /C:\\Git\\bin\\bash\.exe/)
     // The pick and the candidate list are persisted together.
@@ -497,7 +566,7 @@ await test('a read-only form locks the dropdown and the Auto-detect button', asy
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
   const view = await render(row.component, row.props)
   try {
-    assert.equal(view.triggers().length, 2)
+    assert.equal(view.triggers().length, 3)
     assert.equal(view.trigger('终端类型').disabled, true, 'a non-writable form disables the dropdown')
     assert.equal(view.trigger('受限沙箱时').disabled, true, 'and the confined-policy one')
     assert.equal(view.button('自动发现').disabled, true, 'and the Auto-detect button')

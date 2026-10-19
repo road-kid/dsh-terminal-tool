@@ -1,6 +1,6 @@
 {
   "name": "dsh-terminal-tool",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "type": "module",
   "description": "Switch the Windows terminal tool from pwsh to the local Git Bash, without touching presets or the global ctx.shell.",
   "license": "MIT",
@@ -44,6 +44,10 @@
     "./client": {
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
+    },
+    "./pty": {
+      "types": "./lib/types/pty.d.ts",
+      "default": "./lib/pty.js"
     }
   },
   "files": [
@@ -56,7 +60,9 @@
     "assets",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "lib/pty.js",
+    "lib/pty.js.map"
   ],
   "dsh": {
     "bundle": {
@@ -79,7 +85,8 @@
     "rendertest": "node scripts/rendertest.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "~3.18.4"
+    "@deepseek-ai/schemastery": "~3.18.4",
+    "js-yaml": "^4.3.2"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-bash-local": ">=0.2.1-rc.2 <0.3.0",
@@ -87,7 +94,8 @@
     "@deepseek-ai/dsh-shell": ">=0.2.1-rc.2 <0.3.0",
     "@deepseek-ai/dsh-system-prompt": ">=0.2.1-rc.2 <0.3.0",
     "@deepseek-ai/dsh-tool-bash": ">=0.2.1-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.2 <0.3.0"
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-terminal-bash": ">=0.2.1-rc.2 <0.3.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",
@@ -103,10 +111,13 @@
     "@deepseek-ai/dsh-shell": "0.2.1-rc.2",
     "@deepseek-ai/dsh-subprocess-local": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-terminal": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-terminal-bash": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-tool-bash": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tool-pwsh": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
     "@deepseek-ai/dsh-working-directory": "0.2.1-rc.2",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.1",
@@ -123,5 +134,10 @@
   },
   "allowScripts": {
     "esbuild@0.25.12": true
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-terminal-bash": {
+      "optional": true
+    }
   }
 }

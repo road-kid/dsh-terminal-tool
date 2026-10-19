@@ -33,6 +33,14 @@ import { createHandlers, registerRoutes } from '../src/routes.ts'
 import { createRowController, createStore, INITIAL_ROW_STATE, knownPaths } from '../src/client/store.ts'
 import { executorConfig, snapshotConfig, wantsBash } from '../src/config.ts'
 import { isMsysStartupDenial, planLaunch, MSYS_DENIAL_EXIT_CODES } from '../src/confined.ts'
+import {
+  cloneMinimalForGitBash,
+  createVariantManager,
+  formatPresetRows,
+  MINIMAL_ID,
+  parsePresetRows,
+  VARIANT_ID,
+} from '../src/preset.ts'
 
 let passed = 0
 let failed = 0
@@ -382,6 +390,7 @@ await test('/state reports the snapshot without scanning', async () => {
     capability: () => ({ supported: true }),
     settingsAvailable: () => true,
     lastReplace: () => ({ at: 1700000000000, applied: true }),
+    variant: () => ({ status: 'absent', id: 'minimal-gitbash', refs: 0 }),
   })
   const state = handlers.state()
   assert.equal(state.platform, process.platform)
@@ -403,6 +412,7 @@ await test('/discover prefers the in-flight path over the saved one', async () =
       capability: () => ({ supported: true }),
       settingsAvailable: () => true,
       lastReplace: () => undefined,
+      variant: () => ({ status: 'absent', id: 'minimal-gitbash', refs: 0 }),
     })
     const view = await handlers.discover({ bashPath: inFlight })
     assert.ok(view.candidates.length >= 1)
@@ -435,6 +445,7 @@ await test('registerRoutes mounts both routes on the connection service', async 
     capability: () => ({ supported: true }),
     settingsAvailable: () => true,
     lastReplace: () => undefined,
+    variant: () => ({ status: 'absent', id: 'minimal-gitbash', refs: 0 }),
   })
   assert.deepEqual(
     registered.map((route) => route.path).sort(),
@@ -465,7 +476,283 @@ await test('registerRoutes degrades when connection is absent', async () => {
     capability: () => ({ supported: false, reason: 'nope' }),
     settingsAvailable: () => false,
     lastReplace: () => undefined,
+    variant: () => ({ status: 'absent', id: 'minimal-gitbash', refs: 0 }),
   })
+})
+
+/** The shipped `minimal` preset, trimmed to the rows the variant rewrites. */
+const MINIMAL_YAML = `- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    prefix: You are a helpful software engineer assistant.
+    complete: true
+    includeRuntimeContext: false
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+  config:
+    read: false
+    readImage: true
+    write: false
+    edit: false
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+- id: persistent-shell
+  name: cordis:group
+  group: true
+  isolate:
+    terminals: true
+  config:
+    - id: pty
+      name: '@deepseek-ai/dsh-terminal'
+    - id: terminal-bash
+      name: '@deepseek-ai/dsh-terminal-bash'
+      disabled: !!js process.platform === 'win32'
+      config:
+        timeoutMs: 300000
+    - id: persistent-bash
+      name: '@deepseek-ai/dsh-tool-bash-persistent'
+      disabled: !!js process.platform === 'win32'
+      config:
+        timeoutMs: 300000
+    - id: terminal-pwsh
+      name: '@deepseek-ai/dsh-terminal-bash'
+      disabled: !!js process.platform !== 'win32'
+      config:
+        shellDialect: pwsh
+        timeoutMs: 300000
+    - id: persistent-pwsh
+      name: '@deepseek-ai/dsh-tool-pwsh-persistent'
+      disabled: !!js process.platform !== 'win32'
+      config:
+        timeoutMs: 300000
+`
+
+/** The concrete inputs one variant registration embeds. */
+const VARIANT_SPEC = {
+  bashPath: 'C:/Program Files/Git/bin/bash.exe',
+  confinedPolicy: 'unconfined',
+  loginShell: false,
+  pythonUtf8: true,
+}
+
+await test('parsePresetRows keeps js expressions instead of dropping them', () => {
+  const rows = parsePresetRows(MINIMAL_YAML)
+  assert.equal(rows.length, 4)
+  const shell = rows.find((row) => row.id === 'persistent-shell')
+  assert.equal(shell.group, true)
+  assert.deepEqual(shell.isolate, { terminals: true })
+  const terminal = shell.config.find((row) => row.id === 'terminal-bash')
+  // A schema without the `!!js` tag would either throw or read the expression as
+  // a plain string, and the row would then be enabled on both platforms.
+  assert.deepEqual(terminal.disabled, { __jsExpr: "process.platform === 'win32'" })
+})
+
+await test('preset rows survive a dump/load round trip', () => {
+  const rows = parsePresetRows(MINIMAL_YAML)
+  assert.deepEqual(parsePresetRows(formatPresetRows(rows)), rows)
+})
+
+await test('cloneMinimalForGitBash swaps the Windows terminal for the plugin backend', () => {
+  const rows = parsePresetRows(MINIMAL_YAML)
+  const cloned = cloneMinimalForGitBash(rows, VARIANT_SPEC)
+  const shell = cloned.find((row) => row.id === 'persistent-shell')
+  assert.deepEqual(
+    shell.config.map((row) => row.id),
+    ['pty', 'gitbash-pty', 'terminal-bash', 'persistent-bash'],
+  )
+  const pty = shell.config.find((row) => row.id === 'gitbash-pty')
+  assert.equal(pty.name, 'dsh-terminal-tool/pty')
+  assert.equal(pty.config.bashPath, VARIANT_SPEC.bashPath)
+  assert.equal(pty.config.backendType, 'gitbash')
+  const tool = shell.config.find((row) => row.id === 'persistent-bash')
+  // The Windows-side `disabled` must go, and the tool must point at the backend
+  // the new row registers.
+  assert.equal(tool.disabled, undefined)
+  assert.equal(tool.config.backendType, 'gitbash')
+  // The POSIX rows stay untouched so the variant is still usable there.
+  const posix = shell.config.find((row) => row.id === 'terminal-bash')
+  assert.deepEqual(posix.disabled, { __jsExpr: "process.platform === 'win32'" })
+})
+
+await test('cloneMinimalForGitBash leaves the source document untouched', () => {
+  const rows = parsePresetRows(MINIMAL_YAML)
+  const before = JSON.stringify(rows)
+  cloneMinimalForGitBash(rows, VARIANT_SPEC)
+  assert.equal(JSON.stringify(rows), before)
+})
+
+await test('cloneMinimalForGitBash keeps every non-shell row', () => {
+  const rows = parsePresetRows(MINIMAL_YAML)
+  const cloned = cloneMinimalForGitBash(rows, VARIANT_SPEC)
+  assert.deepEqual(
+    cloned.map((row) => row.id),
+    ['persona', 'tool-fs', 'compaction', 'persistent-shell'],
+  )
+})
+
+/** A fake context exposing exactly the services the manager probes. */
+function variantContext(options = {}) {
+  const registered = []
+  let broken
+  const presets = {
+    async register(definition) {
+      registered.push(definition)
+      return async () => {
+        const index = registered.indexOf(definition)
+        if (index >= 0) registered.splice(index, 1)
+      }
+    },
+    async list() {
+      return registered.map((definition) => ({
+        id: definition.id,
+        ...(broken === undefined ? {} : { broken }),
+      }))
+    },
+    async readDocument(id) {
+      assert.equal(id, MINIMAL_ID)
+      return { content: MINIMAL_YAML }
+    },
+  }
+  const services = {
+    agentPresets: presets,
+    ...(options.sessions === undefined ? {} : { sessions: { list: () => options.sessions } }),
+    ...(options.projections === undefined ? {} : { sessionProjections: options.projections }),
+    ...(options.sessionQuery === undefined ? {} : { sessionQuery: options.sessionQuery }),
+  }
+  return {
+    registered,
+    setBroken(value) {
+      broken = value
+    },
+    ctx: { get: (name) => services[name] },
+  }
+}
+
+await test('the variant manager registers a variant and reports it', async () => {
+  const fake = variantContext()
+  const manager = createVariantManager(fake.ctx)
+  const view = await manager.sync('variant', async () => VARIANT_SPEC)
+  assert.equal(view.status, 'registered')
+  assert.equal(view.id, VARIANT_ID)
+  assert.equal(fake.registered.length, 1)
+  assert.equal(fake.registered[0].id, VARIANT_ID)
+  assert.equal(fake.registered[0].order, 3.1)
+  const shell = fake.registered[0].plugins.find((row) => row.id === 'persistent-shell')
+  assert.deepEqual(
+    shell.config.map((row) => row.id),
+    ['pty', 'gitbash-pty', 'terminal-bash', 'persistent-bash'],
+  )
+})
+
+await test('a broken mount is reported as failed, not as registered', async () => {
+  const fake = variantContext()
+  const manager = createVariantManager(fake.ctx)
+  fake.setBroken('Preset services require isolate realms: terminals')
+  await manager.sync('variant', async () => VARIANT_SPEC)
+  // `register` never rejects for a broken mount; only the roster knows.
+  const view = await manager.verify()
+  assert.equal(view.status, 'failed')
+  assert.match(view.reason, /isolate realms/)
+})
+
+await test('switching the variant off removes it when nothing references it', async () => {
+  const fake = variantContext()
+  const manager = createVariantManager(fake.ctx)
+  await manager.sync('variant', async () => VARIANT_SPEC)
+  const view = await manager.sync('oneshot', async () => undefined)
+  assert.equal(view.status, 'absent')
+  assert.equal(fake.registered.length, 0)
+})
+
+await test('a referenced variant is retained, never unregistered', async () => {
+  const fake = variantContext({ sessions: [{ header: { agentPreset: VARIANT_ID } }] })
+  const manager = createVariantManager(fake.ctx)
+  await manager.sync('variant', async () => VARIANT_SPEC)
+  const view = await manager.sync('oneshot', async () => undefined)
+  // Unregistering would leave that session permanently unopenable: resume
+  // resolves the preset id and has no fallback.
+  assert.equal(view.status, 'retained')
+  assert.equal(view.refs, 1)
+  assert.equal(fake.registered.length, 1)
+})
+
+await test('the projection, not the header, decides a live reference', async () => {
+  const sessions = [{ header: { agentPreset: 'standard' } }]
+  const fake = variantContext({ sessions, projections: { stateOf: () => VARIANT_ID } })
+  const manager = createVariantManager(fake.ctx)
+  await manager.sync('variant', async () => VARIANT_SPEC)
+  const view = await manager.sync('leave', async () => undefined)
+  assert.equal(view.status, 'retained')
+})
+
+await test('persisted sessions also keep the variant alive', async () => {
+  const sessionQuery = { listSessions: async () => [{ header: { agentPreset: VARIANT_ID } }] }
+  const fake = variantContext({ sessionQuery })
+  const manager = createVariantManager(fake.ctx)
+  await manager.sync('variant', async () => VARIANT_SPEC)
+  const view = await manager.sync('oneshot', async () => undefined)
+  assert.equal(view.status, 'retained')
+  assert.equal(view.refs, 1)
+})
+
+await test('a variant whose Git Bash was not found fails without registering', async () => {
+  const fake = variantContext()
+  const manager = createVariantManager(fake.ctx)
+  const view = await manager.sync('variant', async () => undefined)
+  assert.equal(view.status, 'failed')
+  assert.match(view.reason, /not found/)
+  assert.equal(fake.registered.length, 0)
+})
+
+await test('a changed Git Bash path rebuilds the definition', async () => {
+  const fake = variantContext()
+  const manager = createVariantManager(fake.ctx)
+  await manager.sync('variant', async () => VARIANT_SPEC)
+  assert.equal(fake.registered.length, 1)
+
+  const moved = { ...VARIANT_SPEC, bashPath: 'D:/PortableGit/bin/bash.exe' }
+  await manager.sync('variant', async () => moved)
+  // The rows embed the path verbatim, so a stale definition would launch a
+  // binary that no longer exists.
+  assert.equal(fake.registered.length, 1)
+  const shell = fake.registered[0].plugins.find((row) => row.id === 'persistent-shell')
+  assert.equal(shell.config.find((row) => row.id === 'gitbash-pty').config.bashPath, moved.bashPath)
+})
+
+await test('an unchanged sync does not churn the definition', async () => {
+  const fake = variantContext()
+  const manager = createVariantManager(fake.ctx)
+  await manager.sync('variant', async () => VARIANT_SPEC)
+  const first = fake.registered[0]
+  await manager.sync('variant', async () => ({ ...VARIANT_SPEC }))
+  // Re-registering on every settings write would retire a generation per save.
+  assert.equal(fake.registered[0], first)
+})
+
+await test('a vanished Git Bash keeps an already usable variant', async () => {
+  const fake = variantContext()
+  const manager = createVariantManager(fake.ctx)
+  await manager.sync('variant', async () => VARIANT_SPEC)
+  const view = await manager.sync('variant', async () => undefined)
+  assert.equal(view.status, 'registered')
+  assert.equal(fake.registered.length, 1)
+})
+
+await test('release() drops the definition on teardown', async () => {
+  const fake = variantContext()
+  const manager = createVariantManager(fake.ctx)
+  await manager.sync('variant', async () => VARIANT_SPEC)
+  await manager.release()
+  assert.equal(fake.registered.length, 0)
+  assert.equal(manager.state().status, 'absent')
 })
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`)

@@ -2,6 +2,7 @@ import z from '@deepseek-ai/schemastery'
 import { LocalBashExecutor } from '@deepseek-ai/dsh-bash-local'
 import type { Config as BashLocalConfig } from '@deepseek-ai/dsh-bash-local'
 import type { ConfinedPolicy } from './confined.ts'
+import type { MinimalMode } from './shared/protocol.ts'
 
 /**
  * Plugin configuration.
@@ -71,6 +72,24 @@ export const Config = z.object({
    * - `fail`: report a sandbox error instead of running anything.
    */
   confinedPolicy: z.union(['unconfined', 'escalate', 'fail'] as const).default('unconfined').volatile(),
+
+  /**
+   * How the official `minimal` preset is treated.
+   *
+   * `minimal` is the only shipped preset that runs a *persistent* shell, and on
+   * Windows that shell is PowerShell (`dsh-tool-pwsh-persistent`). This plugin
+   * only replaces the one-shot `bash` tool, so without this knob minimal
+   * sessions silently fall back to a one-shot Git Bash.
+   *
+   * - `oneshot` (default): pre-0.5 behaviour — minimal gets the one-shot Git Bash.
+   * - `leave`: minimal is untouched and keeps its persistent PowerShell.
+   * - `variant`: minimal is untouched *and* a `minimal-gitbash` preset variant is
+   *   registered so a new session can pick a persistent Git Bash.
+   *
+   * The default stays `oneshot` so upgrading does not change behaviour; the user
+   * opts into the other two from the settings row.
+   */
+  minimalMode: z.union(['leave', 'oneshot', 'variant'] as const).default('oneshot').volatile(),
 })
 
 /** Validated config as cordis hands it to `apply`. */
@@ -84,6 +103,7 @@ export type RawConfig = BashLocalConfig & {
   readonly extraPath: readonly string[]
   readonly pythonUtf8: boolean
   readonly confinedPolicy: ConfinedPolicy
+  readonly minimalMode: MinimalMode
 }
 
 /**
@@ -104,6 +124,7 @@ export interface ConfigSnapshot {
   readonly extraPath: readonly string[]
   readonly pythonUtf8: boolean
   readonly confinedPolicy: ConfinedPolicy
+  readonly minimalMode: MinimalMode
   readonly cwd: string | undefined
   readonly timeoutMs: number
   readonly maxTimeoutMs: number
@@ -145,6 +166,12 @@ function readArray(value: unknown): string[] {
  * The fallback mirrors the schema default: a malformed profile value must keep
  * Git Bash usable rather than leave the session without a terminal tool.
  */
+function readMinimalMode(value: unknown): MinimalMode {
+  const resolved = read<string>(value, 'oneshot')
+  if (resolved === 'leave' || resolved === 'variant') return resolved
+  return 'oneshot'
+}
+
 function readConfinedPolicy(value: unknown): ConfinedPolicy {
   const resolved = read<string>(value, 'unconfined')
   if (resolved === 'escalate' || resolved === 'fail') return resolved
@@ -188,6 +215,7 @@ export function snapshotConfig(config: RawConfig): ConfigSnapshot {
     extraPath: readArray(source.extraPath),
     pythonUtf8: read<boolean>(source.pythonUtf8, true) !== false,
     confinedPolicy: readConfinedPolicy(source.confinedPolicy),
+    minimalMode: readMinimalMode(source.minimalMode),
     cwd: read<string>(source.cwd, '') || undefined,
     timeoutMs: read<number>(source.timeoutMs, DEFAULTS.timeoutMs),
     maxTimeoutMs: read<number>(source.maxTimeoutMs, DEFAULTS.maxTimeoutMs),

@@ -44,6 +44,7 @@ export interface TerminalToolValues {
   readonly bashPath?: string
   readonly bashCandidates?: readonly string[]
   readonly confinedPolicy?: 'unconfined' | 'escalate' | 'fail'
+  readonly minimalMode?: 'leave' | 'oneshot' | 'variant'
 }
 
 /** A locale dictionary. */

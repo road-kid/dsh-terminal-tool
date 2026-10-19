@@ -33,6 +33,40 @@ export const ROUTE_DISCOVER = '/api/dsh-terminal-tool/discover'
 /** Which terminal tool a session gets. */
 export type Dialect = 'pwsh' | 'bash'
 
+/**
+ * What happens to the official `minimal` preset (on Windows it runs a
+ * *persistent* PowerShell through `dsh-tool-pwsh-persistent`).
+ *
+ * - `leave`: the plugin does not touch minimal sessions at all.
+ * - `oneshot`: minimal sessions get the one-shot Git Bash `bash` tool, exactly
+ *   like every other preset (this is the pre-0.5 behaviour).
+ * - `variant`: minimal sessions are left alone, and a separate preset variant
+ *   (`minimal-gitbash`) is registered on demand so a new session can opt into a
+ *   *persistent* Git Bash.
+ */
+export type MinimalMode = 'leave' | 'oneshot' | 'variant'
+
+/** Lifecycle of the `minimal-gitbash` preset variant. */
+export type VariantStatus = 'absent' | 'registered' | 'retained' | 'failed'
+
+/**
+ * Variant state as reported to the settings row.
+ *
+ * `retained` means the option is no longer `variant` but the definition was kept
+ * because durable sessions still resolve it: dropping it would make those
+ * sessions unopenable (`presets.resolve` throws `agent-preset/not-found`, which
+ * the session controller folds into an opaque `gateway/internal`).
+ */
+export interface VariantView {
+  readonly status: VariantStatus
+  /** Preset id the variant is registered under. */
+  readonly id: string
+  /** Number of durable sessions that still resolve the variant. */
+  readonly refs: number
+  /** Failure detail when `status` is `failed`. */
+  readonly reason?: string
+}
+
 /** One discovered bash executable (the client only reads this subset). */
 export interface CandidateView {
   readonly path: string
@@ -91,6 +125,10 @@ export interface StateView {
   /** Persisted candidate list from the last 自动发现 sweep. */
   readonly bashCandidates: readonly string[]
   readonly capability: CapabilityView
+  /** How the official `minimal` preset is treated. */
+  readonly minimalMode: MinimalMode
+  /** Current preset-variant state (also drives the third option's hint). */
+  readonly variant: VariantView
   readonly lastReplace?: ReplaceReport
 }
 

@@ -16,3 +16,13 @@ export { discoverBash } from './discover.ts'
 export { diagnosticPath, writeDiagnostic } from './diag.ts'
 export { isMsysStartupDenial, planLaunch, MSYS_DENIAL_EXIT_CODES, MSYS_DENIAL_SIGNATURES } from './confined.ts'
 export type { ConfinedPolicy, LaunchPlan } from './confined.ts'
+export {
+  cloneMinimalForGitBash,
+  createVariantManager,
+  formatPresetRows,
+  MINIMAL_ID,
+  parsePresetRows,
+  resolveVariantSpec,
+  VARIANT_ID,
+} from './preset.ts'
+export type { VariantSpec } from './preset.ts'

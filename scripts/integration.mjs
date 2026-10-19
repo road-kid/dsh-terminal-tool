@@ -390,6 +390,81 @@ await test('confinedPolicy escalate marks an MSYS startup crash as denied', asyn
   await fiber.dispose()
 })
 
+
+/**
+ * Preset-aware dispatch.
+ *
+ * `minimal` is the only shipped preset with a *persistent* terminal, so the
+ * plugin must not silently swap it for a one-shot bash unless the user asked
+ * for that. The projection is absent in this harness (no
+ * `SessionProjectionRegistry`), which is exactly the fallback path: the durable
+ * creation header decides.
+ */
+async function presetAgent(preset) {
+  const host = await createHost({ sandbox: false })
+  const built = createAgent(host, `session-${preset}`)
+  built.agent.session.header.agentPreset = preset
+  return { host, ...built }
+}
+
+await test('minimalMode leave keeps the official minimal terminal', async () => {
+  const { host, agent, scope, preset } = await presetAgent('minimal')
+  const result = await installSession(host.ctx, agent, snapshotConfig({ dialect: 'bash', minimalMode: 'leave' }))
+  assert.equal(result.status, 'skipped')
+  assert.equal(result.reason, 'minimal-left')
+  assert.ok(agent.ctx.tools.get('pwsh', agent), 'the persistent pwsh tool stays')
+  assert.equal(agent.ctx.tools.get('bash', agent), undefined, 'no one-shot bash was added')
+  await scope.dispose()
+  await preset.dispose()
+})
+
+await test('minimalMode variant also leaves plain minimal sessions alone', async () => {
+  const { host, agent, scope, preset } = await presetAgent('minimal')
+  const result = await installSession(host.ctx, agent, snapshotConfig({ dialect: 'bash', minimalMode: 'variant' }))
+  assert.equal(result.status, 'skipped')
+  assert.equal(result.reason, 'minimal-left')
+  assert.ok(agent.ctx.tools.get('pwsh', agent))
+  await scope.dispose()
+  await preset.dispose()
+})
+
+await test('minimalMode oneshot keeps replacing minimal sessions', async () => {
+  const { host, agent, scope, preset } = await presetAgent('minimal')
+  const result = await installSession(
+    host.ctx,
+    agent,
+    snapshotConfig({ dialect: 'bash', minimalMode: 'oneshot', bashPath: 'C:\\Program Files\\Git\\bin\\bash.exe' }),
+  )
+  assert.equal(result.status, 'installed', `expected the old behaviour: ${JSON.stringify(result)}`)
+  assert.ok(agent.ctx.tools.get('bash', agent))
+  assert.equal(agent.ctx.tools.get('pwsh', agent), undefined)
+  await scope.dispose()
+  await preset.dispose()
+})
+
+await test('a session on the variant preset is never stacked with a second bash', async () => {
+  const { host, agent, scope, preset } = await presetAgent('minimal-gitbash')
+  const result = await installSession(host.ctx, agent, snapshotConfig({ dialect: 'bash', minimalMode: 'oneshot' }))
+  assert.equal(result.status, 'skipped')
+  // The variant mounts its own persistent `bash`; a one-shot one would collide.
+  assert.equal(result.reason, 'already-replaced')
+  await scope.dispose()
+  await preset.dispose()
+})
+
+await test('a standard preset session is unaffected by minimalMode', async () => {
+  const { host, agent, scope, preset } = await presetAgent('standard')
+  const result = await installSession(
+    host.ctx,
+    agent,
+    snapshotConfig({ dialect: 'bash', minimalMode: 'leave', bashPath: 'C:\\Program Files\\Git\\bin\\bash.exe' }),
+  )
+  // `leave` is about minimal only: every other preset keeps the replacement.
+  assert.equal(result.status, 'installed', `standard must still be replaced: ${JSON.stringify(result)}`)
+  await scope.dispose()
+  await preset.dispose()
+})
+
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1
 

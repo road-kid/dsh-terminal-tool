@@ -14,6 +14,7 @@ export type RawConfig = BashLocalConfig & {
   readonly extraPath: readonly string[]
   readonly pythonUtf8: boolean
   readonly confinedPolicy: 'unconfined' | 'escalate' | 'fail'
+  readonly minimalMode: 'leave' | 'oneshot' | 'variant'
 }
 export type SkipReason =
   | 'not-win32'
@@ -22,6 +23,7 @@ export type SkipReason =
   | 'already-replaced'
   | 'bash-not-found'
   | 'missing-service'
+  | 'minimal-left'
   | 'mount-failed'
 export type InstallResult =
   | { readonly status: 'installed'; readonly bashPath: string }

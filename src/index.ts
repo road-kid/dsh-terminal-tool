@@ -1,8 +1,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+// Type-only: brings the Loader's `Events` augmentation (`loader/volatile-update`)
+// into this compilation unit. Erased at build time.
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 
-import { Config, snapshotConfig, wantsBash, type RawConfig } from './config.ts'
+import { Config, snapshotConfig, wantsBash, type ConfigSnapshot, type RawConfig } from './config.ts'
 import { installSession } from './replace.ts'
+import { createVariantManager, resolveVariantSpec } from './preset.ts'
 import { registerRoutes } from './routes.ts'
 import { writeDiagnostic } from './diag.ts'
 import type { CapabilityView, Dialect, ReplaceReport } from './shared/protocol.ts'
@@ -83,6 +87,42 @@ export function apply(ctx: Context, config: RawConfig): void {
     writeDiagnostic('loaded with dialect=pwsh; sessions keep the platform terminal tool')
   }
 
+  // The `minimal-gitbash` variant lives and dies with this fiber: the manager
+  // owns the preset definition and drops it on teardown.
+  const variant = createVariantManager(ctx)
+  const syncVariant = (snapshot: ConfigSnapshot): void => {
+    void variant
+      .sync(snapshot.minimalMode, () =>
+        resolveVariantSpec({
+          bashPath: snapshot.bashPath,
+          bashCandidates: snapshot.bashCandidates,
+          autoDiscover: snapshot.autoDiscover,
+          timeoutMs: snapshot.discoverTimeoutMs,
+          confinedPolicy: snapshot.confinedPolicy,
+          loginShell: snapshot.loginShell,
+          pythonUtf8: snapshot.pythonUtf8,
+        }),
+      )
+      .catch((error: unknown) => {
+        writeDiagnostic(`variant: sync failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+  }
+
+  // Deferred through `inject` for two reasons: the preset registry is a sibling
+  // host row whose activation order is not ours to assume, and a child fiber
+  // keeps the first registration out of this row's own activation.
+  ctx.inject(['agentPresets'], () => {
+    syncVariant(snapshotConfig(config))
+  })
+  ctx.effect(() => () => variant.release(), 'terminal-tool: variant')
+
+  // Volatile-only edits do not reload this fiber: the loader commits the new
+  // values and emits this event, so this is where a mode change takes effect
+  // without restarting the host.
+  ctx.on('loader/volatile-update', () => {
+    syncVariant(snapshotConfig(config))
+  })
+
   // The settings row reads its state and candidates over `/api`; registering
   // here keeps the read surface next to the writes it describes.
   registerRoutes(ctx, {
@@ -90,6 +130,14 @@ export function apply(ctx: Context, config: RawConfig): void {
     capability: () => probeCapability(ctx),
     settingsAvailable: () => visible(ctx, 'settings'),
     lastReplace: () => lastReplace,
+    // `list()` re-audits the preset tree and waits for the Host Loader to
+    // settle, so it can only run once this row's activation is over. The
+    // handler is therefore a read plus a fire-and-forget refresh: the next
+    // `/state` (or the next session) reports the truth.
+    variant: () => {
+      void variant.verify()
+      return variant.state()
+    },
   })
 
   /**

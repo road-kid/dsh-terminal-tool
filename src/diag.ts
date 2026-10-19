@@ -49,6 +49,7 @@ export type SkipReason =
   | 'already-replaced'
   | 'bash-not-found'
   | 'missing-service'
+  | 'minimal-left'
   | 'mount-failed'
 
 /**

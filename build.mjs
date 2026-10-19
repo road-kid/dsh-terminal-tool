@@ -39,6 +39,10 @@ const external = [
   '@deepseek-ai/dsh-system-prompt',
   '@deepseek-ai/dsh-tool-bash',
   '@deepseek-ai/dsh-tools',
+  '@deepseek-ai/dsh-terminal',
+  '@deepseek-ai/dsh-terminal-bash',
+  '@deepseek-ai/dsh-subprocess',
+  'js-yaml',
   'node:*',
 ]
 
@@ -63,6 +67,23 @@ await build({
 await build({
   entryPoints: [join(root, 'src', 'testing.ts')],
   outfile: join(outdir, 'testing.js'),
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  target: 'node22',
+  sourcemap: true,
+  external,
+  logLevel: 'warning',
+  legalComments: 'none',
+})
+
+// Persistent-terminal backend (`dsh-terminal-tool/pty`). A separate entry point
+// because it imports `@deepseek-ai/dsh-terminal-bash`, which is absent from
+// deployments without the persistent-terminal stack: only the preset row that
+// explicitly names this entry loads it.
+await build({
+  entryPoints: [join(root, 'src', 'pty.ts')],
+  outfile: join(outdir, 'pty.js'),
   bundle: true,
   format: 'esm',
   platform: 'node',
@@ -127,6 +148,7 @@ export type RawConfig = BashLocalConfig & {
   readonly extraPath: readonly string[]
   readonly pythonUtf8: boolean
   readonly confinedPolicy: 'unconfined' | 'escalate' | 'fail'
+  readonly minimalMode: 'leave' | 'oneshot' | 'variant'
 }
 export type SkipReason =
   | 'not-win32'
@@ -135,6 +157,7 @@ export type SkipReason =
   | 'already-replaced'
   | 'bash-not-found'
   | 'missing-service'
+  | 'minimal-left'
   | 'mount-failed'
 export type InstallResult =
   | { readonly status: 'installed'; readonly bashPath: string }
@@ -144,6 +167,29 @@ export declare function apply(ctx: Context, config: RawConfig): void
 export declare function installResultFor(agentId: string): InstallResult | undefined
 `
 await writeFile(join(outdir, 'types', 'index.d.ts'), declaration, 'utf8')
+
+// Declaration for the preset row entry point: row consumers only need the
+// plugin identity, the config type and `apply`.
+await writeFile(
+  join(outdir, 'types', 'pty.d.ts'),
+  `import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+
+export declare const name = 'terminal-tool-pty'
+export declare const inject: string[]
+export type PtyConfig = {
+  readonly backendType: string
+  readonly bashPath: string
+  readonly shellArgs: readonly string[]
+  readonly pythonUtf8: boolean
+  readonly loginShell: boolean
+  readonly confinedPolicy: 'unconfined' | 'escalate' | 'fail'
+}
+export declare const Config: z<PtyConfig>
+export declare function apply(ctx: Context, config: PtyConfig): Promise<void>
+`,
+  'utf8',
+)
 
 const size = (await readFile(join(outdir, 'index.js'))).length
 process.stdout.write(`built lib/index.js (${size} bytes)\n`)

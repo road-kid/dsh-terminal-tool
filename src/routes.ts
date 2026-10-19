@@ -11,6 +11,7 @@ import {
   type DiscoverView,
   type ReplaceReport,
   type StateView,
+  type VariantView,
 } from './shared/protocol.ts'
 
 /**
@@ -36,6 +37,8 @@ interface RouteDeps {
   readonly settingsAvailable: () => boolean
   /** Most recent per-session replacement attempt, if any. */
   readonly lastReplace: () => ReplaceReport | undefined
+  /** Current `minimal-gitbash` preset-variant state. */
+  readonly variant: () => VariantView
 }
 
 /** Minimal shape of `connection.fetch` as this plugin uses it. */
@@ -102,6 +105,8 @@ export function createHandlers(deps: RouteDeps): {
       bashPath: snapshot.bashPath,
       bashCandidates: snapshot.bashCandidates,
       capability: deps.capability(),
+      minimalMode: snapshot.minimalMode,
+      variant: deps.variant(),
       ...(lastReplace === undefined ? {} : { lastReplace }),
     }
   }

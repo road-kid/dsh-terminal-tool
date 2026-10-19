@@ -116,6 +116,14 @@ await test('client bundle ships the terminal-tool row markup, copy and routes', 
     'row.confined.label',
     'row.confined.description',
     'row.confined.unconfined',
+    'row.minimal.label',
+    'row.minimal.description',
+    'row.minimal.leave',
+    'row.minimal.oneshot',
+    'row.minimal.variant',
+    'row.minimal.variantReady',
+    'row.minimal.variantRetained',
+    'row.minimal.variantFailed',
     'row.discover',
   ]) {
     assert.match(source, new RegExp(`["'\`]${key}["'\`]`), `${key} is used`)
@@ -177,6 +185,7 @@ await test('Config validates and every plugin field is volatile', async () => {
     'extraPath',
     'pythonUtf8',
     'confinedPolicy',
+    'minimalMode',
   ]) {
     assert.equal(typeof value[field]?.get, 'function', `${field} must be volatile`)
   }
@@ -194,6 +203,8 @@ await test('Config defaults leave the session on pwsh', () => {
   assert.equal(value.loginShell.get(), false)
   assert.equal(value.pythonUtf8.get(), true)
   assert.equal(value.confinedPolicy.get(), 'unconfined')
+  // Upgrading must not change how existing minimal sessions behave.
+  assert.equal(value.minimalMode.get(), 'oneshot')
 })
 
 await test('Config rejects an unknown dialect', () => {
@@ -210,5 +221,32 @@ await test('built bundle keeps first-party packages external', async () => {
   assert.match(source, /from "@deepseek-ai\/dsh-tool-bash"/)
 })
 
+await test('the pty entry point is published and kept external', async () => {
+  assert.equal(pkg.exports['./pty']?.default, './lib/pty.js')
+  assert.equal(pkg.exports['./pty']?.types, './lib/types/pty.d.ts')
+  for (const file of ['lib/pty.js', 'lib/pty.js.map']) {
+    assert.ok(pkg.files.includes(file), `${file} must ship`)
+  }
+  // Acknowledgements travel with the whole `lib/types` directory.
+  assert.ok(pkg.files.includes('lib/types'), 'declarations ship')
+  // Optional peer: the root plugin must load on machines without the
+  // persistent-terminal stack, so a missing package cannot be a hard failure.
+  assert.equal(pkg.peerDependencies['@deepseek-ai/dsh-terminal-bash'], '>=0.2.1-rc.2 <0.3.0')
+  assert.equal(pkg.peerDependenciesMeta['@deepseek-ai/dsh-terminal-bash'].optional, true)
+  const source = await readFile(join(root, 'lib', 'pty.js'), 'utf8')
+  assert.match(source, /from "@deepseek-ai\/dsh-terminal-bash"/)
+  assert.match(source, /registerBackend/)
+  // The root bundle must not import the persistent stack at all.
+  const host = await readFile(join(root, 'lib', 'index.js'), 'utf8')
+  assert.doesNotMatch(host, /@deepseek-ai\/dsh-terminal-bash/)
+})
+
+await test('the host bundle ships the minimal-mode variant machinery', async () => {
+  const source = await readFile(join(root, 'lib', 'index.js'), 'utf8')
+  assert.match(source, /minimal-gitbash/)
+  assert.match(source, /dsh-terminal-tool\/pty/)
+  assert.match(source, /agentPresets/)
+  assert.match(source, /minimal-left/)
+})
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1

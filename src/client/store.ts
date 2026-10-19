@@ -1,5 +1,6 @@
 import { fetchCandidates, fetchState } from './api.ts'
 import type { ConfinedPolicy } from '../confined.ts'
+import type { MinimalMode, VariantStatus } from '../shared/protocol.ts'
 import type { ConfigFormLike, FieldOp, FormSnapshot, TerminalToolValues, Translate } from './types.ts'
 
 /**
@@ -22,6 +23,16 @@ import type { ConfigFormLike, FieldOp, FormSnapshot, TerminalToolValues, Transla
 /** Which terminal tool a session gets. */
 export type Dialect = 'pwsh' | 'bash'
 
+export type { MinimalMode, VariantStatus }
+
+/** Variant state as the row renders it. */
+export interface VariantInfo {
+  readonly status: VariantStatus
+  readonly id: string
+  readonly refs: number
+  readonly reason?: string | undefined
+}
+
 /** Coarse lifecycle of the row. */
 export type RowStatus = 'loading' | 'hidden' | 'ready'
 
@@ -31,6 +42,8 @@ export interface RowState {
   readonly platform: string
   readonly dialect: Dialect
   readonly confinedPolicy: ConfinedPolicy
+  readonly minimalMode: MinimalMode
+  readonly variant: VariantInfo
   readonly bashPath: string
   readonly savedCandidates: readonly string[]
   readonly scanned: readonly string[]
@@ -58,6 +71,7 @@ export interface RowController {
   start(): () => void
   setDialect(dialect: Dialect): void
   setConfinedPolicy(policy: ConfinedPolicy): void
+  setMinimalMode(mode: MinimalMode): void
   setBashPath(path: string): void
   discover(): void
 }
@@ -68,6 +82,8 @@ export const INITIAL_ROW_STATE: RowState = {
   platform: '',
   dialect: 'pwsh',
   confinedPolicy: 'unconfined',
+  minimalMode: 'oneshot',
+  variant: { status: 'absent', id: 'minimal-gitbash', refs: 0 },
   bashPath: '',
   savedCandidates: [],
   scanned: [],
@@ -151,6 +167,11 @@ export function normalizeConfinedPolicy(value: unknown): ConfinedPolicy {
   return value === 'escalate' || value === 'fail' ? value : 'unconfined'
 }
 
+/** Narrow a wire value to the three legal minimal modes, defaulting to `oneshot`. */
+export function normalizeMinimalMode(value: unknown): MinimalMode {
+  return value === 'leave' || value === 'variant' ? value : 'oneshot'
+}
+
 /**
  * Build the controller for one mounted row.
  *
@@ -181,6 +202,7 @@ export function createRowController(
         : {
             dialect: value.dialect === 'bash' ? ('bash' as const) : ('pwsh' as const),
             confinedPolicy: normalizeConfinedPolicy(value.confinedPolicy),
+            minimalMode: normalizeMinimalMode(value.minimalMode),
             bashPath: value.bashPath ?? '',
             savedCandidates: value.bashCandidates ?? [],
           }),
@@ -220,6 +242,13 @@ export function createRowController(
     // is restored by the next form snapshot and surfaced as an error.
     store.setState({ confinedPolicy: policy, error: undefined, notice: undefined })
     write([{ op: 'set', path: ['confinedPolicy'], value: policy }])
+  }
+
+  const setMinimalMode = (mode: MinimalMode): void => {
+    // Optimistic like the other two dropdowns: the next form snapshot restores
+    // the old value if the Host rejects the write.
+    store.setState({ minimalMode: mode, error: undefined, notice: undefined })
+    write([{ op: 'set', path: ['minimalMode'], value: mode }])
   }
 
   const setBashPath = (path: string): void => {
@@ -278,7 +307,17 @@ export function createRowController(
           ...(state.capability.reason === undefined ? {} : { unsupportedReason: state.capability.reason }),
           // The form's value wins whenever it has arrived; `/state` is the
           // fallback for the brief window before the describe mirror loads.
-          ...(settingsReady ? {} : { dialect: state.dialect, bashPath: state.bashPath }),
+          ...(settingsReady
+            ? {}
+            : {
+                dialect: state.dialect,
+                bashPath: state.bashPath,
+                minimalMode: normalizeMinimalMode(state.minimalMode),
+              }),
+          // The variant lifecycle is Host-owned: never cached across a mount.
+          // A Host that predates the field has none, so keep the empty state
+          // rather than letting the row render against undefined.
+          ...(state.variant === undefined ? {} : { variant: state.variant }),
           status: state.platform === 'win32' ? 'ready' : 'hidden',
         })
       })
@@ -300,5 +339,5 @@ export function createRowController(
     }
   }
 
-  return { store, start, setDialect, setConfinedPolicy, setBashPath, discover }
+  return { store, start, setDialect, setConfinedPolicy, setMinimalMode, setBashPath, discover }
 }

@@ -6,7 +6,7 @@
 | 插件 entry id | `terminal-tool` |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0`（Windows / Desktop profile） |
 | 契约基线 | 各第一方包 `lib/types/*.d.ts`（0.2.1-rc.2，npm 实数） |
-| 文档状态 | 实现定稿（0.4.1） |
+| 文档状态 | 实现定稿（0.5.0）：新增 `minimalMode` 与 `minimal-gitbash` 预设变体（§13） |
 
 > **临时替代方案**：DSH 还没有内置的「终端 / Git Bash 选择」能力，Windows 上平台组合只提供 PowerShell。**在官方能力落地前，本插件是它的临时替代方案**：复用官方执行器与工具，在 `agent/created` 里把新会话的终端换成 Git Bash；Windows 受限档位下的 `confinedPolicy` 也属于这段临时接线，不改变宿主沙箱本身。**官方提供等价设置后即可停用本插件**——移除 profile 里的插件行并重启，新会话即回到官方终端工具。插件不改 DSH 安装目录、不改任何 preset、不接管全局 `ctx.shell`，配置只落当前 profile 的 patch 层，卸载无残留。
 
@@ -41,12 +41,13 @@ DSH 在 Windows 上只组合 PowerShell 执行器：`@deepseek-ai/dsh-base` 的�
 | F13 | 诊断日志 | `%TEMP%\dsh-terminal-tool.log`，`DSH_TERMINAL_TOOL_DIAG_FILE` 可改道 |
 | F14 | 原生 Windows 程序中文输出乱码缓解 | 注入 `PYTHONIOENCODING=utf-8`（仅当未设置） |
 | F15 | 受限沙箱策略：`unconfined` / `escalate` / `fail`，默认 `unconfined` | `src/confined.ts` 的 `planLaunch` + 执行器分支 |
+| F16 | 极简模式：`minimalMode` 三值（默认 `oneshot`）；`variant` 下注册 `minimal-gitbash` 预设变体并接持久 Git Bash 后端 | `src/config.ts` 的 `minimalMode` + `src/preset.ts` + `src/pty.ts`（`dsh-terminal-tool/pty` 入口），见 §13 |
 
 ### 1.3 明确不做
 
 - 不接管全局 `ctx.shell`，不动 `dsh-base` / 任何 preset 快照，不改 DSH 安装目录。
 - 不修改宿主沙箱实现，也不自行实现升级审批：`escalate` 的 `approveEscalation` 仍由第一方 `dsh-tool-bash` 负责，插件只把 MSYS 启动失败标成 `denied`。默认 `unconfined` 会绕过文件沙箱，但这是配置面的显式选择（见 2.4），不是隐式旁路。
-- 不提供 `minimal` preset 的持久 shell 等价物（其 PTY 绑在 preset 私有 isolate realm，外部插件无法只换后端）。
+- 不改写官方 `minimal` 预设，也不接管官方持久终端注册表。持久 shell 等价物以**新增预设** `minimal-gitbash` 交付（§13），官方定义只读、原样保留；没有会话引用时变体自行注销。
 
 ---
 
@@ -104,7 +105,7 @@ bash 那一套」的接线。因此本项目的每条行为都跑在第一方代
 `tools.register` / `systemPrompt.section` 都是 `@deepseek-ai/dsh-tools` /
 `@deepseek-ai/dsh-system-prompt` 的公开 API（`register(definition): () => void`、
 `restrict(filter): () => void` 均有 `restrict` 的作用域语义：只过滤继承层、不影响本层
-注册）。代价是两条必然的行为约束：只对新会话生效、`minimal` preset 的持久 shell 退化。
+注册）。代价是两条必然的行为约束：只对新会话生效、`minimal` preset 的持久 shell 需要单独处理（见 §13：它不是一个执行器替换能解决的面，改用预设变体交付）。
 
 ### 2.2 关键取舍：`isolate('shell')` 注入 bash 执行器
 
@@ -200,6 +201,12 @@ MSYS2 在 Windows 受限档位下初始化命名共享内存就被拒，这不�
                  │  │            '-c', command])        │
                  │  └ planLaunch(): direct/confine/fail │
                  └──────────────────────────────────────┘
+
+  另一条独立的线（minimalMode === 'variant' 时才有）：
+   src/index.ts —— syncVariant() → src/preset.ts（读 minimal 文档 → 克隆 → 注册）
+                                   └→ verify()（激活返回后查名册，失败置 failed）
+   minimal-gitbash 预设的持久终端组 —— gitbash-pty 行 → src/pty.ts（lib/pty.js）
+                                   └→ BashTerminalBackend + 注入的 spawnTerminal
 ```
 
 ### 3.1 模块清单
@@ -212,6 +219,8 @@ MSYS2 在 Windows 受限档位下初始化命名共享内存就被拒，这不�
 | `src/paths.ts` | `bashInstallRoot` / `bashPathEntries` / `composePath` / `pathKey` | ~120 |
 | `src/executor.ts` | `GitBashExecutor extends LocalBashExecutor`（含沙箱分支） | ~170 |
 | `src/confined.ts` | 受限启动决策 `planLaunch` 与 MSYS 启动失败签名分类 | ~80 |
+| `src/preset.ts` | 预设变体管理：读官方 `minimal` 文档、克隆并改写持久终端组、注册/注销、引用计数 | ~410 |
+| `src/pty.ts` | `dsh-terminal-tool/pty` 入口：以 `gitbash` 类型注册持久终端后端（复用官方 `BashTerminalBackend`） | ~170 |
 | `src/replace.ts` | 每会话替换：校验、isolate、挂载、restrict、section、回滚 | ~200 |
 | `src/diag.ts` | 诊断日志（文件 + `DSH_TERMINAL_TOOL_DIAG_FILE`） | ~60 |
 | `src/types.ts` | 内部类型与可选服务的最窄投影 | ~80 |
@@ -242,7 +251,8 @@ MSYS2 在 Windows 受限档位下初始化命名共享内存就被拒，这不�
 设置 → 通用 → 终端工具（lib/client.js）
   ├── 挂载：POST /api/dsh-terminal-tool/state（只读，不扫描）
   │        + configForms.get('terminal-tool') 的 snapshot（值更可信）
-  ├── 选择方言 / 受限策略 / 提交路径 / 点「自动发现」：
+  │        /state 另带 minimalMode 与 variant（status / id / refs / reason）
+  ├── 选择方言 / 受限策略 / 极简模式 / 提交路径 / 点「自动发现」：
   │        POST /api/dsh-terminal-tool/discover（仅此时扫描）
   │        然后 configForms.mutate([...]) 一次原子写回（profile patch 层）
   └── 渲染：官方 Button / Input / Menu / IconChevronDownOutlineRegular
@@ -275,6 +285,8 @@ export const Config = z.object({
   pythonUtf8:    z.boolean().default(true).volatile(),                    // F14
   confinedPolicy: z.union(['unconfined', 'escalate', 'fail'] as const)
                    .default('unconfined').volatile(),                     // F15
+  minimalMode:   z.union(['leave', 'oneshot', 'variant'] as const)
+                   .default('oneshot').volatile(),                        // F16
 })
 ```
 
@@ -287,6 +299,9 @@ export const Config = z.object({
   文件沙箱限制；`escalate` 走官方沙箱与官方审批；`fail` 抛 `SandboxUnavailableError`。
   非法值在快照时回退 `unconfined`，与 schema 默认一致。
 - 任一字段非法（如路径指向 WSL）→ 该会话跳过替换，会话保持 pwsh。
+- `minimalMode` 只影响 agent preset 为 `minimal` 或 `minimal-gitbash` 的会话，默认 `oneshot`
+  与 0.4.x 完全一致。非法值在 `readMinimalMode()` 里回退 `oneshot`（`leave` / `variant`
+  原样保留），不阻断启动。三个取值的语义、变体生命周期与沙箱行为见 §13。
 
 ---
 
@@ -297,8 +312,12 @@ export const Config = z.object({
 1. `diag('apply: platform=...')`。
 2. 读一次 Config 快照并校验；非法只诊断，不抛错（配置错误不得阻断宿主启动）。
 3. `registerRoutes(ctx, …)` 注册两条 `/api` 路由（`/state` / `/discover`，都不写配置）；`connection`
-   服务是可选注入，缺失时只写诊断，设置行报「无 state」而不是让插件失败。
-4. 注册 `ctx.on('agent/created', …)`；监听体整体 try/catch ——
+   服务是可选注入，缺失时只写诊断，设置行报「无 state」而不是让插件失败。`/state` 的
+   `variant` 取自 `variant.state()`。
+4. `createVariantManager(ctx)`，`syncVariant(初始快照)` 发起变体注册并在其后 `verify()`；
+   `ctx.effect(...)` 登记 `variant.release()` 作为卸载时的注销。`loader/volatile-update`
+   时重跑 `sync → verify`（volatile 改动不重载 fiber，见 §13.5）。
+5. 注册 `ctx.on('agent/created', …)`；监听体整体 try/catch ——
    **通知型监听器抛出会影响会话启动**，这是硬纪律。
 
 ### 5.2 新会话（`agent/created`）
@@ -328,6 +347,11 @@ export const Config = z.object({
 `restrict` 与 `section` 的 disposer 随 agent ctx 释放；执行器与工具随子树 fiber 释放。
 把 `dialect` 改回 `pwsh` → 插件行 config 变更触发 fiber 重载，新会话不再替换；
 已开会话保持原状。
+
+变体走另一条路：`minimalMode` 是 volatile 字段，改动不重载 fiber，只触发
+`loader/volatile-update` → 重跑 `sync → verify`。引用保护（`retained`）只发生在
+**改选项**这条路径上；fiber 真正释放（禁用 / 卸载插件）时 `ctx.effect` 里的
+`variant.release()` 无条件注销定义，因为插件本身已经不在了，这是可接受的取舍。
 
 ---
 
@@ -444,6 +468,8 @@ Git Bash 的 `git`/`ls`/`grep` 需要 `Git\bin`、`Git\usr\bin`、以及 `ucrt64
 | 「自动发现」无命中 | 保留原路径，提示「没有找到 Git Bash，请直接填入 bash.exe 的完整路径。」，不清空输入 |
 | 保存被宿主拒绝 | 「宿主拒绝了这次保存（版本冲突或字段不可编辑），请刷新后重试。」 |
 | 宿主缺能力 | 行内展示「当前 DSH 版本不支持自动切换：{reason}」，控件禁用 |
+| 变体注册失败 | 「极简模式」行在 `variant` 下展示失败原因（`/state` 的 `variant.reason`），不静默；其余三行仍可用 |
+| 变体被保留 | 展示「仍有 {n} 个会话引用该变体，暂不删除」，与 `variant.status === 'retained'` 一致 |
 | 挂载 | 不扫描、不写配置；只有点击才触发 `/discover` 与写回 |
 
 ---
@@ -453,13 +479,13 @@ Git Bash 的 `git`/`ls`/`grep` 需要 `Git\bin`、`Git\usr\bin`、以及 `ucrt64
 | 层 | 手段 | 断言 |
 |---|---|---|
 | 类型 | `tsc --noEmit`（devDeps 钉 `@deepseek-ai/*@0.2.1-rc.2` 的真实 `.d.ts`） | 0 error |
-| 纯逻辑单测 | `node scripts/selftest.mjs` | 发现顺序、WSL 排除、路径校验、PATH 去重、env 组装、受限策略快照与 `planLaunch` 决策、MSYS 启动失败签名、`/state` 与 `/discover` 的 handler、两条路由的注册与降级（35 项） |
+| 纯逻辑单测 | `node scripts/selftest.mjs` | 发现顺序、WSL 排除、路径校验、PATH 去重、env 组装、受限策略快照与 `planLaunch` 决策、MSYS 启动失败签名、`/state` 与 `/discover` 的 handler（含 `minimalMode` / `variant` 字段）、两条路由的注册与降级、预设行克隆与变体生命周期（51 项） |
 | 执行器 | `scripts/integration.mjs` 在真实 `tool-bash` 下起真 Git Bash | `echo "$BASH_VERSION"` / `uname -s` → `MINGW64_NT-…` |
-| 契约 | `node scripts/contractcheck.mjs` | Config 字段全 volatile；patch 行 id/name/disabled 正确；导出面完整；客户端 bundle 装载形状；bundle 未内联第一方；`react` 与官方 atoms specifier 保持 external（15 项） |
+| 契约 | `node scripts/contractcheck.mjs` | Config 字段全 volatile；patch 行 id/name/disabled 正确；导出面完整；客户端 bundle 装载形状；bundle 未内联第一方；`react` 与官方 atoms specifier 保持 external；`./pty` 入口与可选 peer（17 项） |
 | 客户端半区 | `node scripts/clientsmoke.mjs` | 真实执行 `lib/client.js`：模块 id、`react` 与官方 UI atoms external、`inject` 面、`apply` 注册 `settings.general.item`、无 `configForms` 时降级为只读、迟到 `configForms` 替换而非叠加、重复 `apply` 幂等（8 项） |
 | 行状态机 | `node scripts/rowselftest.mjs` | `/state` 读入、平台决定显隐、乐观写入、受限策略同步与写入、revision 冲突与抛错提示、自动发现持久化候选、发现为空（15 项） |
-| 行渲染 | `node scripts/rendertest.mjs` | jsdom + React 18 真实渲染 `lib/client.js` 导出的组件，按 role/aria 断言：标题与描述、方言下拉触发器（`button[aria-haspopup="menu"]`）、`role="menuitem"`、选 bash 出路径行、受限策略下拉与切换写回、路径 `input[aria-label="Git Bash 路径"]`、Enter 提交、自动发现变下拉、发现为空、非 Windows 不渲染、只读禁用（11 项）。官方 atoms 由行为级替身 `scripts/primitives-double.mjs` 提供，断言不依赖 CSS 类名 |
-| 集成 | `node scripts/integration.mjs`：真实 `dsh-tools` / `dsh-system-prompt` / `dsh-tool-bash` / `dsh-scope` 挂在一次性 cordis 应用里 | `bash` 出现且 `pwsh` 消失、祖先 scope 仍见 `pwsh`、prompt 段被清空、真命令跑在 Git Bash 上、二次 install 幂等、`dialect=pwsh` 完全不替换、`unconfined` 不调用 `confine` 且结果报 `danger-full-access`、`escalate` 的 MSYS 崩溃标 `denied`、`sandboxMode` 在会绕过时隐藏、`apply()` 接线 `agent/created`+`agent/disposed`（8 项） |
+| 行渲染 | `node scripts/rendertest.mjs` | jsdom + React 18 真实渲染 `lib/client.js` 导出的组件，按 role/aria 断言：标题与描述、方言下拉触发器（`button[aria-haspopup="menu"]`）、`role="menuitem"`、选 bash 出路径行、受限策略下拉与切换写回、路径 `input[aria-label="Git Bash 路径"]`、Enter 提交、自动发现变下拉、发现为空、非 Windows 不渲染、只读禁用（12 项）。官方 atoms 由行为级替身 `scripts/primitives-double.mjs` 提供，断言不依赖 CSS 类名 |
+| 集成 | `node scripts/integration.mjs`：真实 `dsh-tools` / `dsh-system-prompt` / `dsh-tool-bash` / `dsh-scope` 挂在一次性 cordis 应用里 | `bash` 出现且 `pwsh` 消失、祖先 scope 仍见 `pwsh`、prompt 段被清空、真命令跑在 Git Bash 上、二次 install 幂等、`dialect=pwsh` 完全不替换、`unconfined` 不调用 `confine` 且结果报 `danger-full-access`、`escalate` 的 MSYS 崩溃标 `denied`、`sandboxMode` 在会绕过时隐藏、`apply()` 接线 `agent/created`+`agent/disposed`、四种预设下的 `minimalMode` 分流（13 项） |
 | 人工 | 装进 profile + 重启 + 新会话 | 模型工具目录只有 `bash`；卡片与退出码正常；`dialect=pwsh` 时完全复原 |
 
 ---
@@ -471,7 +497,7 @@ dsh-terminal-tool/
 ├── package.json          # name / dsh.bundle.patch / exports / files / engines
 ├── cordis.patch.yml      # 仅 Windows 挂载的一行 insert
 ├── tsconfig.json         # strict，noEmit
-├── build.mjs             # esbuild 打包 src → lib（+ 手写 .d.ts）；react 与官方 atoms external
+├── build.mjs             # esbuild 打包 src → lib（+ 手写 .d.ts）；react、官方 atoms 与 dsh-terminal-bash external
 ├── locale/{en,zh}.json   # meta.title / meta.description（强制）
 ├── assets/icon.svg       # ≤256 KiB，包内相对路径
 ├── src/*.ts              # 宿主模块 + shared/protocol.ts + testing.ts（仅测试用入口，不发布）
@@ -488,9 +514,9 @@ dsh-terminal-tool/
 ```
 
 发布包（`npm pack`）只含：`lib/index.js`、`lib/index.js.map`、`lib/client.js`、
-`lib/client.js.map`、`lib/types/**`、`locale/*.json`、`assets/icon.svg`、
-`cordis.patch.yml`、`README.md`、`LICENSE`、`package.json` —— `src/`、`scripts/`、
-`docs/`、`lib/testing.js` 一律不进 tarball。
+`lib/client.js.map`、`lib/pty.js`、`lib/pty.js.map`、`lib/types/**`、`locale/*.json`、
+`assets/icon.svg`、`cordis.patch.yml`、`README.md`、`LICENSE`、`package.json` ——
+`src/`、`scripts/`、`docs/`、`lib/testing.js` 一律不进 tarball。
 
 ---
 
@@ -498,7 +524,13 @@ dsh-terminal-tool/
 
 1. 仅 Windows。
 2. 只对新会话生效。
-3. `minimal` preset 的持久 shell 会退化为一次性 shell。
+3. 极简模式的变体不是自动生效的：
+   - 变体必须每个新会话手选一次（预设选择器里选「极简模式 · Git Bash」），已存在的
+     `minimal` 会话不会被重新组装；
+   - 关掉选项不一定能移除变体：仍有会话引用 `minimal-gitbash` 时定义保留（`retained`），
+     否则那些会话会永久打不开；没有会话删除 API，引用不会自行过期；
+   - 持久终端没有沙箱升级通道，`escalate` 在变体里不可达，表现等同受限档位下拒绝执行；
+   - 持久终端打开期间不能切换沙箱档位（官方 `ensureSandboxModeFence` 的约束）。
 4. 受限沙箱（read-only / workspace-write）下 MSYS2 无法创建 BaseNamedObjects，
    Git Bash 无法在沙箱内启动：`NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-…): 0xC0000022`，
    `exit -1073741502`。**这是宿主沙箱行为，与插件无关**。默认 `confinedPolicy: unconfined`
@@ -522,6 +554,9 @@ dsh-terminal-tool/
 | V2 | 官方 `tool-bash` 在 `isolate('shell')` 子树里解析 `ctx.shell` | **已由集成测试验证**：同一 agent 子树内的 `tool-bash` 拿到的是 `GitBashExecutor`，命令实际跑在 Git Bash 上（`uname -s` → `MINGW64_NT-…`） |
 | V3 | client 半区设置行 | **已完成**：`src/client/` 注册 `settings.general.item`（id `terminal-tool`，order 60）；终端的枚举选择是官方下拉 + `Menu`，路径是官方 `Input`（多候选时同一套下拉），「自动发现」是官方 outline `Button`；两条 `/api` 路由由 `src/routes.ts` 提供 |
 | V4 | 设置行能否直接复用官方 UI atoms | **已验证**：`@deepseek-ai/dsh-client-ui-primitives` 由 Web shell 以 `PLATFORM_MODULES` 播种，client bundle 保持 external（contractcheck / clientsmoke 断言）；jsdom 渲染测试用 `scripts/primitives-double.mjs` 行为级替身，按 role/aria 断言 |
+| V5 | 注册变体后预设名册能否立刻看到 | **不能，已知体验缺口**：官方名册只在界面重新挂载时重拉（`ctx.remote.agentPresets.list()`），所以注册后已打开的新建会话界面不会立刻出现该项，需重开预设选择器（或刷新界面）才可见。M3 再研究刷新钩子 |
+| V6 | 用 `sessionQuery` 会话头判断变体是否仍被引用 | **有盲区，已接受的取舍**：切换了 preset 但尚未产生第一轮对话的会话，其持久化会话头可能还没写入新 preset，扫描会漏掉它。活跃会话投影覆盖同一时刻的在线会话，两者叠加才是完整判断；仍不足时只能靠「保留」而不是「删除」来兜底 |
+| V7 | 变体引用是否会自行过期 | **不会**：宿主没有会话删除 API，`listSessions()` 里存在的记录不会被清理，因此 `retained` 状态可能长期存在。注销只发生在引用数真正归零时 |
 
 ### 12.1 编码期发现的、与设计稿的差异（已按实际实现修正）
 
@@ -536,3 +571,134 @@ dsh-terminal-tool/
 | `lib/types/index.d.ts` 手写后 `from './config.ts'` | 发布包里没有 `.ts` 源，类型解析会悬空 | 声明文件内联全部公共类型 |
 | 设置行自绘胶囊按钮 / `<input>` / `<select>`（早期版实现） | 与相邻官方设置项视觉、行为都不一致；官方对枚举偏好统一渲染成下拉 `Menu` | 改用官方 UI atoms（`Button` / `Input` / `Menu` / `IconChevronDownOutlineRegular`）；`styles.ts` 只保留版式 |
 | 「client bundle 不得 import 第一方值模块」（早期对 client purity 约束的理解） | 官方 UI atoms 由 Web shell 的冻结模块表提供，和 `react` 同类，官方 `PreferenceRow` 也是直接引用 | client bundle 正常 `require('@deepseek-ai/dsh-client-ui-primitives')` 并保持 external；其余第一方包仍不得进入 client bundle |
+| `dsh-terminal-tool/pty` 的 Config 含 `loginShell` / `pathEntries`（PLAN §5.3） | 实际只有 `backendType` / `bashPath` / `shellArgs` / `pythonUtf8` / `confinedPolicy`：持久终端不需要一次性执行器那套 PATH 合成，`shellArgs` 已能表达登录壳 | 以代码为准；`src/preset.ts` 仍会往 `gitbash-pty` 行写 `loginShell`，schemastery 会忽略该未知键——留作待清理项 |
+| PLAN §5.3：「`bashPath` 由根插件填入，volatile 改了要重建变体」 | **已实现**：`converge()` 用 `specSignature()` 比较 `bashPath` / `confinedPolicy` / `loginShell` / `pythonUtf8`，不同则先注销再注册；相同则完全不碰定义（避免每次设置写入都退役一代 generation）。已绑定的会话继续跑旧 revision | 以代码为准 |
+| 第四行「极简模式」的测试覆盖 | `scripts/rendertest.mjs` 新增两项（三项菜单与写回、变体三态提示）；`scripts/rowselftest.mjs` 未单独加用例（控制器写入路径与 `setConfinedPolicy` 完全同构） | 以渲染层覆盖为准 |
+
+---
+
+## 13. 极简模式与预设变体
+
+### 13.1 为什么 `minimal` 是特例
+
+出厂预设里只有 `minimal` 使用持久 PTY：它的组合文档中有一组
+`isolate: { terminals: true }` 的持久终端行（Windows 上是持久 **pwsh**，POSIX 上是持久
+bash），`bash` / `pwsh` 工具与 `tool:bash` 提示词段都由这一组提供。§5.2 的会话级替换只
+覆盖「本会话可见的执行器」，替换不掉这组私有影子里的后端，因此 `minimal` 需要独立的
+处理面。设计论证与三个方案的取舍见 [`PLAN-minimal-mode.md`](PLAN-minimal-mode.md)。
+
+### 13.2 能力：`minimalMode`
+
+新增 volatile 叶子 `minimalMode: 'leave' | 'oneshot' | 'variant'`，默认 `oneshot`，
+因此升级不改变行为。它只对 agent preset 为 `minimal` 的会话（以及变体
+`minimal-gitbash` 自身）生效，其它预设完全不受影响。
+
+| 值 | `minimal` 会话 | 预设名册 |
+|---|---|---|
+| `leave` | 插件不介入，保留官方持久终端 | 不变 |
+| `oneshot`（默认） | 替换为一次性 Git Bash `bash`，隐藏 `pwsh`（0.4.x 行为） | 不变 |
+| `variant` | 同样不介入；另注册 `minimal-gitbash` | 多一项「极简模式 · Git Bash」（id `minimal-gitbash`，order `3.1`） |
+
+三条补充规则：`variant` 不改变默认预设、不替用户选会话，只负责把变体放进名册；变体不可用
+（找不到 Git Bash / 构造失败）时**不静默回落成 `oneshot`**，`minimal` 会话按 `leave` 语义处
+理、设置行显示失败原因；选项只对新会话生效。
+
+`src/replace.ts` 在闸门前两行短路：preset 是 `minimal-gitbash` → `already-replaced`；
+preset 是 `minimal` 且 `minimalMode !== 'oneshot'` → `minimal-left`（新增的
+`SkipReason`，见 `src/diag.ts`）。
+
+### 13.3 独立入口 `dsh-terminal-tool/pty`
+
+变体需要「持久 Git Bash」后端，而持久后端属于 `@deepseek-ai/dsh-terminal-bash` 的
+能力面。把它做成**单独的导出入口**（`src/pty.ts` → `lib/pty.js`，`exports['./pty']`，
+并列入 `files`）而不是塞进根插件，理由是加载面：根插件从不 import
+`@deepseek-ai/dsh-terminal-bash`，没有持久终端栈的机器仍然能正常加载根插件；该包只声明为
+**可选** `peerDependencies`（`peerDependenciesMeta.optional`），缺失时只有变体不可用。
+
+入口的实现方式是无子类复用：`new BashTerminalBackend(ctx, resolved, spawnTerminal)`，
+注入官方构造函数的第三个参数——一个负责真正落地的 `spawnTerminal`。它调用与执行器同源的
+`planLaunch()`：
+
+- `direct` → 以 `[bashPath, ...shellArgs]` 直接 `ctx.subprocess.spawnTerminal()`，不套
+  受限包装；`pythonUtf8` 为真时补 `PYTHONIOENCODING=utf-8`。
+- `confine` → 直接交给 `ctx.subprocess.spawnTerminal(spec)`（非 Windows 的正常路径）。
+- `fail` → 抛 `SandboxUnavailableError`。
+
+注册的 backendType 默认 `gitbash`，成功后 `ctx.terminals.registerBackend(backend)`，
+失败只写诊断 `pty: backend registration failed`。这个入口必须挂在预设的持久终端组里
+（`isolate: { terminals: true }`），否则会落到别人家的 `terminals` 注册表上。
+
+### 13.4 行克隆：不改官方定义，只读一份再改写
+
+`src/preset.ts` 的做法是「读—解析—克隆—改写—重注册」：
+
+1. `agentPresets.readDocument('minimal')` 取官方定义原文。
+2. `js-yaml` 解析，schema 是 `JSON_SCHEMA.extend(JsExpr)`——`!!js` 标签
+   （`tag:yaml.org,2002:js`）照抄官方 `cordis-plugin-include` 的定义。谓词
+   （`predicate`）必须保留，否则 re-dump 会写成普通映射 `{ __jsExpr: … }` 而不是标签，
+   loader 就不再把它当表达式求值。
+3. `structuredClone` 整棵行列表，仅改持久终端组：
+   - 从该组的行列表里过滤掉 `terminal-pwsh` / `persistent-pwsh`；
+   - 去掉 `persistent-bash` 上的 `disabled`，并把 `config.backendType` 设为 `gitbash`；
+   - 在 `pty` 行之后插入 `gitbash-pty` 行（`name: 'dsh-terminal-tool/pty'`）。
+4. 以 id `minimal-gitbash`、name「极简模式 · Git Bash」、order `3.1` 重新注册。
+   遇到形状不符合预期的官方文档直接抛错（`minimal preset has no persistent-shell group`），
+   不做猜测性修补——官方改了布局时应当明确失败，而不是生成一个半坏的预设。
+
+官方 `minimal` 定义自始至终只读。
+
+### 13.5 注册时机纪律
+
+注册本身可以在插件激活期间发起（`ctx.inject(['agentPresets'], …)`）。但
+`agentPresets.list()` / `resolve()` / `retain()` 必须等激活返回之后再调用：
+在激活期间调 `list()` 会与 Host Loader 互等，形成死锁。
+
+因此 `createVariantManager(ctx)` 把它拆成两步：`sync()` 只发起注册（`register()`），
+`verify()` 在注册的 Promise 之后、由 `apply` 的 `.then()` 链调用，此时激活早已返回。
+`verify()` 调 `agentPresets.list()` 找 `minimal-gitbash`，`entry.broken !== undefined`
+时把状态置为 `failed` 并带上原因，由 `/state` 的 `variant.reason` 透到设置行。
+`apply` 里另注册 `loader/volatile-update` 监听，配置一变就重跑 `sync → verify`。
+
+### 13.6 注销的引用安全规则
+
+注销也要等激活返回后，并且必须先数引用：
+
+- 引用来源一：活跃会话——`ctx.get('sessions').list()` 后逐个读
+  `sessionProjections.stateOf(session, 'agentPreset')`，读不到时用会话头的字段兜底。
+- 引用来源二：已持久化的会话——`sessionQuery.listSessions()` 的
+  `record.header.agentPreset`；服务缺失按 0 处理，扫描抛错只写诊断
+  `variant: sessionQuery scan failed`。
+
+规则：`minimalMode !== 'variant'` 时，若仍有引用则**保留定义**（`status: 'retained'`，
+`refs` 计数），否则注销（`absent`）。原因是官方恢复路径按 id 解析预设、没有回退分支：
+删掉定义会让这些会话永久打不开，用户只会看到一个笼统的 `gateway/internal`。没有会话删除
+API，所以这些引用不会自行过期。
+
+### 13.7 持久后端的沙箱语义
+
+持久终端没有 `sandbox_permissions` 升级通道，`escalate` 在这条路上不可达。
+
+| `confinedPolicy` | 持久后端的实际行为 |
+|---|---|
+| `unconfined`（默认） | `direct`：直接启动 Git Bash，不经沙箱；命令不受文件沙箱约束 |
+| `escalate` | 仍走 `confine` 路径（`planLaunch` 返回 `confine`），于是照常撞上 MSYS 启动失败；持久终端**没有** `sandbox_permissions` 升级通道，所以失败后没有重试入口，实际结果等同拒绝 |
+| `fail` | 抛 `SandboxUnavailableError`，信息同执行器路径 |
+
+另有一条官方约束：`ensureSandboxModeFence` 禁止在持久终端打开期间切换沙箱档位，用户在
+会话中改沙箱模式会被拒绝。这是宿主行为，插件不绕过。
+
+### 13.8 客户端设置行
+
+设置行在原有三行之后新增第四行「极简模式」，控件仍是官方 `Menu` 下拉（与「受限沙箱时」
+同一套触发器），文案键为 `row.minimal.*`（zh/en 各一套）。它只在 `dialect === 'bash'`
+且能力探测通过时渲染；选择器写回仍走 `configForms` 的 `{op:'set', path:['minimalMode']}`
+一次原子写回。变体状态来自 `/state` 的 `variant` 字段，三种提示分别对应
+`registered` / `retained`（带引用数）/ `failed`（带原因）。不新增路由：注册与注销都在
+Host 侧，客户端只读状态。
+
+### 13.9 与官方 terminal bundle 的关系
+
+`@deepseek-ai/dsh-experimental-terminal-bundle` 提供全局 `terminal_*` 工具与一个独立的
+`terminals` 注册表；本插件的 `pty` 入口只在某个预设的持久终端组里注册后端。两者不共享
+注册表，也不互相读写状态。官方 bundle 已安装时，变体预设的组里仍是官方 `pty` 行在前、
+本插件的 `gitbash-pty` 行在后，`terminal_*` 工具由前者提供，`bash` 走后者。
