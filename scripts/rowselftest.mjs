@@ -155,6 +155,51 @@ await test('setDialect writes one op and updates optimistically', async () => {
   assert.equal(controller.store.getState().saving, false)
 })
 
+await test('start() mirrors the confined policy and falls back to unconfined', async () => {
+  const state = {
+    platform: 'win32',
+    settingsAvailable: true,
+    dialect: 'pwsh',
+    bashPath: '',
+    bashCandidates: [],
+    capability: { supported: true },
+  }
+  const form = formStub({
+    dialect: 'bash',
+    bashPath: '',
+    bashCandidates: [],
+    confinedPolicy: 'escalate',
+  })
+  const controller = createRowController(form, (key) => key)
+  await withFetch(jsonFetch(state), async () => {
+    const stop = controller.start()
+    await settle()
+    assert.equal(controller.store.getState().confinedPolicy, 'escalate', 'the form wins')
+    stop()
+  })
+
+  // An absent or unknown wire value is not an error: it means the default.
+  const fallback = formStub({ dialect: 'bash', bashPath: '', bashCandidates: [], confinedPolicy: 'nonsense' })
+  const fallbackController = createRowController(fallback, (key) => key)
+  await withFetch(jsonFetch(state), async () => {
+    const stop = fallbackController.start()
+    await settle()
+    assert.equal(fallbackController.store.getState().confinedPolicy, 'unconfined')
+    stop()
+  })
+})
+
+await test('setConfinedPolicy writes one op and updates optimistically', async () => {
+  const form = formStub()
+  const controller = createRowController(form, (key) => key)
+  controller.setConfinedPolicy('fail')
+  assert.equal(controller.store.getState().confinedPolicy, 'fail')
+  await settle()
+  assert.deepEqual(form.mutations, [[{ op: 'set', path: ['confinedPolicy'], value: 'fail' }]])
+  assert.equal(controller.store.getState().saving, false)
+  assert.equal(controller.store.getState().error, undefined)
+})
+
 await test('discover() persists the picked path together with the usable list', async () => {
   const form = formStub()
   const controller = createRowController(form, (key) => key)

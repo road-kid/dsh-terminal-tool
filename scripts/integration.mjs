@@ -35,8 +35,9 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as ShellEnv from '@deepseek-ai/dsh-shell-env'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 
+import { SandboxProvider } from '@deepseek-ai/dsh-sandbox'
 import { apply, installResultFor } from '../lib/index.js'
-import { installSession, snapshotConfig } from '../lib/testing.js'
+import { GitBashExecutor, installSession, snapshotConfig } from '../lib/testing.js'
 
 let passed = 0
 let failed = 0
@@ -136,6 +137,64 @@ function createAgent(host, id) {
 }
 
 const hasGitBash = existsSync('C:\\Program Files\\Git\\bin\\bash.exe')
+
+/**
+ * A sandbox provider that records calls and wraps argv with whatever the test
+ * asks for. Confinement itself is exercised elsewhere; here the point is which
+ * launch path the executor selects and what it records afterwards.
+ */
+class FakeSandboxProvider extends SandboxProvider {
+  calls = []
+
+  constructor(ctx, wrapped) {
+    super(ctx)
+    this.wrapped = wrapped
+  }
+
+  async confine(argv, policy) {
+    this.calls.push({ argv, policy })
+    return {
+      argv: this.wrapped ?? [...argv],
+      enforcement: 'full',
+      denialSignatures: [],
+      runnerFailureRules: [],
+    }
+  }
+}
+
+/** One foreground spec with a resolved policy, the shape `resolve()` produces. */
+function execSpec(command, sandboxPolicy) {
+  return {
+    command,
+    workdir: process.cwd(),
+    timeoutMs: 30_000,
+    onExpiry: 'kill',
+    stdoutMaxBytes: 64_000,
+    sandboxPolicy,
+  }
+}
+
+/**
+ * Mount the executor in its own isolated shell realm, exactly like
+ * `installSession` does, and hand back the service instance for direct calls.
+ */
+async function mountExecutor(ctx, { bashPath, confinedPolicy }) {
+  const shellCtx = ctx.isolate(`shell-confined-${confinedPolicy}`)
+  const fiber = await shellCtx.plugin(GitBashExecutor, {
+    bashPath,
+    pathEntries: [],
+    loginShell: false,
+    pythonUtf8: false,
+    confinedPolicy,
+    cwd: process.cwd(),
+    timeoutMs: 30_000,
+    maxTimeoutMs: 600_000,
+    maxOutputBytes: 64_000,
+    maxSpillBytes: 64 * 1024 * 1024,
+    graceMs: 3_000,
+  })
+  return { executor: shellCtx.get('shell'), fiber }
+}
 
 await test('installSession replaces pwsh with bash for one session', async () => {
   const host = await createHost()
@@ -248,6 +307,64 @@ await test('apply() wires agent/created and records the outcome', async () => {
   await scope.dispose()
   await preset.dispose()
   await host.ctx.registry.delete(fiber)
+})
+
+await test('confinedPolicy unconfined runs Git Bash directly on Windows', async () => {
+  if (process.platform !== 'win32' || !hasGitBash) {
+    process.stdout.write('     (skipped: needs Windows with Git Bash installed)\n')
+    return
+  }
+  const host = await createHost({ sandbox: false })
+  const fake = new FakeSandboxProvider(host.ctx)
+  const { executor, fiber } = await mountExecutor(host.ctx, {
+    bashPath: 'C:\\Program Files\\Git\\bin\\bash.exe',
+    confinedPolicy: 'unconfined',
+  })
+
+  const execution = await executor.execute(
+    execSpec('echo "$BASH_VERSION"; uname -s', {
+      mode: 'workspace-write',
+      workspaceRoot: process.cwd(),
+    }),
+  )
+  const result = await execution.result()
+  await execution.done
+
+  assert.equal(fake.calls.length, 0, 'unconfined must not call sandbox.confine()')
+  assert.equal(result.sandbox.mode, 'workspace-write', 'the resolved mode is still reported')
+  assert.equal(result.sandbox.denied, false)
+  assert.equal(result.sandbox.enforcement, 'partial', 'a bypassed launch must not claim a full boundary')
+  assert.match(result.stdout.text, /MINGW|MSYS/i, `expected an MSYS uname, got: ${result.stdout.text}`)
+
+  await fiber.dispose()
+})
+
+await test('confinedPolicy escalate marks an MSYS startup crash as denied', async () => {
+  const crash =
+    'fatal error - NtCreateDirectoryObject(\\BaseNamedObjects\\msys-2.0S5-1888ae32e00d56aa): 0xC0000022'
+  const host = await createHost({ sandbox: false })
+  const fake = new FakeSandboxProvider(host.ctx, [
+    process.execPath,
+    '-e',
+    `process.stderr.write(${JSON.stringify(crash)}); process.exit(3221225794)`,
+  ])
+  const { executor, fiber } = await mountExecutor(host.ctx, {
+    bashPath: 'C:\\Program Files\\Git\\bin\\bash.exe',
+    confinedPolicy: 'escalate',
+  })
+
+  const execution = await executor.execute(
+    execSpec('true', { mode: 'workspace-write', workspaceRoot: process.cwd() }),
+  )
+  const result = await execution.result()
+  await execution.done
+
+  assert.equal(fake.calls.length, 1, 'escalate must go through the sandbox provider')
+  assert.equal(fake.calls[0].policy.mode, 'workspace-write')
+  assert.equal(execution.sandbox?.denied, true, 'the live process carries the denial fact')
+  assert.equal(result.sandbox.denied, true, 'the foreground projection carries the denial fact')
+
+  await fiber.dispose()
 })
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`)

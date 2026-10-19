@@ -113,6 +113,9 @@ await test('client bundle ships the terminal-tool row markup, copy and routes', 
     'row.dialect.bash',
     'row.path.label',
     'row.path.missing',
+    'row.confined.label',
+    'row.confined.description',
+    'row.confined.unconfined',
     'row.discover',
   ]) {
     assert.match(source, new RegExp(`["'\`]${key}["'\`]`), `${key} is used`)
@@ -173,6 +176,7 @@ await test('Config validates and every plugin field is volatile', async () => {
     'loginShell',
     'extraPath',
     'pythonUtf8',
+    'confinedPolicy',
   ]) {
     assert.equal(typeof value[field]?.get, 'function', `${field} must be volatile`)
   }
@@ -189,6 +193,7 @@ await test('Config defaults leave the session on pwsh', () => {
   assert.equal(value.autoDiscover.get(), true)
   assert.equal(value.loginShell.get(), false)
   assert.equal(value.pythonUtf8.get(), true)
+  assert.equal(value.confinedPolicy.get(), 'unconfined')
 })
 
 await test('Config rejects an unknown dialect', () => {

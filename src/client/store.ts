@@ -1,4 +1,5 @@
 import { fetchCandidates, fetchState } from './api.ts'
+import type { ConfinedPolicy } from '../confined.ts'
 import type { ConfigFormLike, FieldOp, FormSnapshot, TerminalToolValues, Translate } from './types.ts'
 
 /**
@@ -29,6 +30,7 @@ export interface RowState {
   readonly status: RowStatus
   readonly platform: string
   readonly dialect: Dialect
+  readonly confinedPolicy: ConfinedPolicy
   readonly bashPath: string
   readonly savedCandidates: readonly string[]
   readonly scanned: readonly string[]
@@ -55,6 +57,7 @@ export interface RowController {
   /** Read `/state` and start following the form; returns the disposer. */
   start(): () => void
   setDialect(dialect: Dialect): void
+  setConfinedPolicy(policy: ConfinedPolicy): void
   setBashPath(path: string): void
   discover(): void
 }
@@ -64,6 +67,7 @@ export const INITIAL_ROW_STATE: RowState = {
   status: 'loading',
   platform: '',
   dialect: 'pwsh',
+  confinedPolicy: 'unconfined',
   bashPath: '',
   savedCandidates: [],
   scanned: [],
@@ -137,6 +141,11 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Narrow a wire value to the three legal policies, defaulting to `unconfined`. */
+export function normalizeConfinedPolicy(value: unknown): ConfinedPolicy {
+  return value === 'escalate' || value === 'fail' ? value : 'unconfined'
+}
+
 /**
  * Build the controller for one mounted row.
  *
@@ -166,6 +175,7 @@ export function createRowController(
         ? {}
         : {
             dialect: value.dialect === 'bash' ? ('bash' as const) : ('pwsh' as const),
+            confinedPolicy: normalizeConfinedPolicy(value.confinedPolicy),
             bashPath: value.bashPath ?? '',
             savedCandidates: value.bashCandidates ?? [],
           }),
@@ -198,6 +208,13 @@ export function createRowController(
     // the next form snapshot and shows an error.
     store.setState({ dialect, error: undefined, notice: undefined })
     write([{ op: 'set', path: ['dialect'], value: dialect }])
+  }
+
+  const setConfinedPolicy = (policy: ConfinedPolicy): void => {
+    // Optimistic for the same reason as the dialect dropdown: a rejected write
+    // is restored by the next form snapshot and surfaced as an error.
+    store.setState({ confinedPolicy: policy, error: undefined, notice: undefined })
+    write([{ op: 'set', path: ['confinedPolicy'], value: policy }])
   }
 
   const setBashPath = (path: string): void => {
@@ -278,5 +295,5 @@ export function createRowController(
     }
   }
 
-  return { store, start, setDialect, setBashPath, discover }
+  return { store, start, setDialect, setConfinedPolicy, setBashPath, discover }
 }

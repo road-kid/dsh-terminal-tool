@@ -295,6 +295,59 @@ await test('choosing Git Bash reveals the path row and writes the dialect', asyn
   }
 })
 
+await test('the bash row shows the confined-sandbox choice, the pwsh row does not', async () => {
+  const form = formStub({ dialect: 'bash', bashPath: 'C:\\Git\\bin\\bash.exe', bashCandidates: [] })
+  const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
+  const view = await render(row.component, row.props)
+  try {
+    const text = view.text()
+    assert.match(text, /受限沙箱时/)
+    assert.match(
+      text,
+      /Windows 沙箱会把命令降到低完整性，Git Bash 无法在其中启动；这里决定怎么处理。/,
+    )
+    // The default choice is to run directly, and the row says what that costs.
+    assert.match(view.trigger('受限沙箱时').textContent ?? '', /直接启动（不经沙箱）/)
+    assert.equal(view.host.querySelector('[role="note"]')?.textContent, '注意：选它之后，模型执行的命令不受文件沙箱限制。')
+    assert.deepEqual(form.mutations, [], 'mounting never writes')
+  } finally {
+    await view.unmount()
+  }
+
+  // The choice only exists for the bash dialect.
+  const pwshForm = formStub({ dialect: 'pwsh', bashPath: '', bashCandidates: [] })
+  const pwshRow = mountRow({ form: pwshForm, state: READY_STATE, discover: { candidates: [] } })
+  const pwshView = await render(pwshRow.component, pwshRow.props)
+  try {
+    assert.equal(pwshView.trigger('受限沙箱时'), null, 'no confined-sandbox dropdown on the pwsh row')
+    assert.doesNotMatch(pwshView.text(), /受限沙箱时/)
+    assert.equal(pwshView.host.querySelector('[role="note"]'), null)
+  } finally {
+    await pwshView.unmount()
+  }
+})
+
+await test('choosing a confined policy writes it', async () => {
+  const form = formStub({ dialect: 'bash', bashPath: 'C:\\Git\\bin\\bash.exe', bashCandidates: [] })
+  const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
+  const view = await render(row.component, row.props)
+  try {
+    await click(view.trigger('受限沙箱时'))
+    assert.deepEqual(
+      view.menuItems().map((item) => item.textContent),
+      ['直接启动（不经沙箱）', '申请升级后运行', '报告错误'],
+    )
+    await click(view.menuItems()[1])
+    assert.deepEqual(form.mutations, [[{ op: 'set', path: ['confinedPolicy'], value: 'escalate' }]])
+    assert.match(view.trigger('受限沙箱时').textContent ?? '', /申请升级后运行/)
+    assert.equal(view.menu(), null, 'the menu closes after a choice')
+    // Only the unconfined choice carries the warning.
+    assert.equal(view.host.querySelector('[role="note"]'), null)
+  } finally {
+    await view.unmount()
+  }
+})
+
 await test('a bash row with at most one known path types it into an Input', async () => {
   const form = formStub({ dialect: 'bash', bashPath: 'C:\\Git\\bin\\bash.exe', bashCandidates: [] })
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
@@ -303,7 +356,7 @@ await test('a bash row with at most one known path types it into an Input', asyn
     const input = view.host.querySelector('input[aria-label="Git Bash 路径"]')
     assert.ok(input, 'the path is a text field')
     assert.equal(input.value, 'C:\\Git\\bin\\bash.exe')
-    assert.equal(view.triggers().length, 1, 'only the dialect dropdown is a menu')
+    assert.equal(view.triggers().length, 2, 'the dialect and confined dropdowns are menus, the path is an Input')
     assert.doesNotMatch(view.text(), /点「自动发现」扫描本机/)
   } finally {
     await view.unmount()
@@ -350,8 +403,9 @@ await test('Auto-detect scans, then the path control becomes a dropdown of the h
   const view = await render(row.component, row.props)
   try {
     await click(view.button('自动发现'))
-    // Two hits turn the path control into a dropdown; the dialect one stays.
-    assert.equal(view.triggers().length, 2, 'the path control is now a dropdown too')
+    // Two hits turn the path control into a dropdown; the dialect and confined
+    // ones stay.
+    assert.equal(view.triggers().length, 3, 'the path control is now a dropdown too')
     const trigger = view.trigger('Git Bash 路径')
     assert.match(trigger.textContent ?? '', /C:\\Git\\bin\\bash\.exe/)
     // The pick and the candidate list are persisted together.
@@ -422,8 +476,9 @@ await test('a read-only form locks the dropdown and the Auto-detect button', asy
   const row = mountRow({ form, state: READY_STATE, discover: { candidates: [] } })
   const view = await render(row.component, row.props)
   try {
-    assert.equal(view.triggers().length, 1)
+    assert.equal(view.triggers().length, 2)
     assert.equal(view.trigger('终端类型').disabled, true, 'a non-writable form disables the dropdown')
+    assert.equal(view.trigger('受限沙箱时').disabled, true, 'and the confined-policy one')
     assert.equal(view.button('自动发现').disabled, true, 'and the Auto-detect button')
     assert.equal(view.host.querySelector('input[aria-label="Git Bash 路径"]').disabled, true)
   } finally {

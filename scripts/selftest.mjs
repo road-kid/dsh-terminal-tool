@@ -32,6 +32,7 @@ import { discoverBash, scanBashCandidates } from '../src/discover.ts'
 import { createHandlers, registerRoutes } from '../src/routes.ts'
 import { createRowController, createStore, INITIAL_ROW_STATE, knownPaths } from '../src/client/store.ts'
 import { executorConfig, snapshotConfig, wantsBash } from '../src/config.ts'
+import { isMsysStartupDenial, planLaunch, MSYS_DENIAL_EXIT_CODES } from '../src/confined.ts'
 
 let passed = 0
 let failed = 0
@@ -216,6 +217,7 @@ await test('discovery reports a rejection reason for a bad configured path', asy
 await test('snapshotConfig defaults to pwsh so installing changes nothing', () => {
   const snapshot = snapshotConfig({})
   assert.equal(snapshot.dialect, 'pwsh')
+  assert.equal(snapshot.confinedPolicy, 'unconfined')
   assert.equal(wantsBash(snapshot), false)
 })
 
@@ -245,6 +247,88 @@ await test('executorConfig passes plain values, not volatile wrappers', () => {
   const args = executorConfig(snapshot)
   assert.equal(args.timeoutMs, 45000)
   assert.equal(args.cwd, 'C:\\work')
+  assert.equal(args.confinedPolicy, 'unconfined')
+})
+
+await test('snapshotConfig reads every confinedPolicy value', () => {
+  for (const value of ['unconfined', 'escalate', 'fail']) {
+    assert.equal(snapshotConfig({ confinedPolicy: value }).confinedPolicy, value)
+    assert.equal(snapshotConfig({ confinedPolicy: { get: () => value } }).confinedPolicy, value)
+  }
+  assert.equal(executorConfig(snapshotConfig({ confinedPolicy: 'fail' })).confinedPolicy, 'fail')
+})
+
+await test('snapshotConfig falls back to unconfined for an unknown confinedPolicy', () => {
+  // A profile edited by hand must not leave the session without a terminal
+  // tool just because the value is a typo.
+  assert.equal(snapshotConfig({ confinedPolicy: 'always' }).confinedPolicy, 'unconfined')
+  assert.equal(snapshotConfig({ confinedPolicy: { get: () => 42 } }).confinedPolicy, 'unconfined')
+})
+
+// --- confined launch planning ----------------------------------------------
+
+await test('isMsysStartupDenial recognises the MSYS2 crash on Windows', () => {
+  const crash =
+    'fatal error - NtCreateDirectoryObject(\\BaseNamedObjects\\msys-2.0S5-1888ae32e00d56aa): 0xC0000022'
+  assert.equal(isMsysStartupDenial(MSYS_DENIAL_EXIT_CODES[0], crash), true)
+  assert.equal(isMsysStartupDenial(MSYS_DENIAL_EXIT_CODES[1], ''), true)
+  assert.equal(isMsysStartupDenial(1, "fatal error - couldn't create signal pipe, Win32 error 5"), true)
+  assert.equal(isMsysStartupDenial(null, crash.toUpperCase()), true)
+})
+
+await test('isMsysStartupDenial ignores ordinary command failures', () => {
+  assert.equal(isMsysStartupDenial(1, 'bash: nope: command not found'), false)
+  assert.equal(isMsysStartupDenial(0, ''), false)
+  assert.equal(isMsysStartupDenial(null, ''), false)
+  // The signature must be the MSYS banner, not a generic access-denied word.
+  assert.equal(isMsysStartupDenial(1, 'access denied'), false)
+})
+
+await test('planLaunch runs directly when there is nothing to confine', () => {
+  assert.deepEqual(
+    planLaunch({ hasSandbox: false, policyMode: 'workspace-write', choice: 'fail', platform: 'win32' }),
+    { kind: 'direct' },
+  )
+  assert.deepEqual(
+    planLaunch({ hasSandbox: true, policyMode: undefined, choice: 'escalate', platform: 'win32' }),
+    { kind: 'direct' },
+  )
+  assert.deepEqual(
+    planLaunch({ hasSandbox: true, policyMode: 'danger-full-access', choice: 'escalate', platform: 'win32' }),
+    { kind: 'direct' },
+  )
+})
+
+await test('planLaunch confines outside Windows and follows the Windows policy', () => {
+  assert.deepEqual(
+    planLaunch({ hasSandbox: true, policyMode: 'read-only', choice: 'unconfined', platform: 'linux' }),
+    { kind: 'confine' },
+  )
+  assert.deepEqual(
+    planLaunch({ hasSandbox: true, policyMode: 'workspace-write', choice: 'unconfined', platform: 'win32' }),
+    { kind: 'direct' },
+  )
+  assert.deepEqual(
+    planLaunch({ hasSandbox: true, policyMode: 'workspace-write', choice: 'escalate', platform: 'win32' }),
+    { kind: 'confine' },
+  )
+  assert.deepEqual(
+    planLaunch({ hasSandbox: true, policyMode: 'workspace-write', choice: 'escalate', platform: 'darwin' }),
+    { kind: 'confine' },
+  )
+})
+
+await test('planLaunch fails closed with actionable guidance on Windows', () => {
+  const plan = planLaunch({
+    hasSandbox: true,
+    policyMode: 'read-only',
+    choice: 'fail',
+    platform: 'win32',
+  })
+  assert.equal(plan.kind, 'fail')
+  assert.match(plan.reason, /read-only/)
+  assert.match(plan.reason, /confinedPolicy/)
+  assert.match(plan.reason, /danger-full-access/)
 })
 
 // --- settings-row read surface ---------------------------------------------

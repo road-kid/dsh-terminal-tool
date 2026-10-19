@@ -126,6 +126,7 @@ export type RawConfig = BashLocalConfig & {
   readonly loginShell: boolean
   readonly extraPath: readonly string[]
   readonly pythonUtf8: boolean
+  readonly confinedPolicy: 'unconfined' | 'escalate' | 'fail'
 }
 export type SkipReason =
   | 'not-win32'

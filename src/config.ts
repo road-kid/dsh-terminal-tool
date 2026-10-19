@@ -1,6 +1,7 @@
 import z from '@deepseek-ai/schemastery'
 import { LocalBashExecutor } from '@deepseek-ai/dsh-bash-local'
 import type { Config as BashLocalConfig } from '@deepseek-ai/dsh-bash-local'
+import type { ConfinedPolicy } from './confined.ts'
 
 /**
  * Plugin configuration.
@@ -56,6 +57,14 @@ export const Config = z.object({
 
   /** Export `PYTHONIOENCODING=utf-8` for the MSYS environment (F14). */
   pythonUtf8: z.boolean().default(true).volatile(),
+
+  /**
+   * What to do when a confined Windows sandbox cannot start Git Bash. The
+   * default runs bash directly, because the alternative is a crash before the
+   * command is even parsed; `escalate` hands the decision to the first-party
+   * approval flow, and `fail` reports a configuration error instead.
+   */
+  confinedPolicy: z.union(['unconfined', 'escalate', 'fail'] as const).default('unconfined').volatile(),
 })
 
 /** Validated config as cordis hands it to `apply`. */
@@ -68,6 +77,7 @@ export type RawConfig = BashLocalConfig & {
   readonly loginShell: boolean
   readonly extraPath: readonly string[]
   readonly pythonUtf8: boolean
+  readonly confinedPolicy: ConfinedPolicy
 }
 
 /**
@@ -87,6 +97,7 @@ export interface ConfigSnapshot {
   readonly loginShell: boolean
   readonly extraPath: readonly string[]
   readonly pythonUtf8: boolean
+  readonly confinedPolicy: ConfinedPolicy
   readonly cwd: string | undefined
   readonly timeoutMs: number
   readonly maxTimeoutMs: number
@@ -120,6 +131,18 @@ function readArray(value: unknown): string[] {
   const resolved = isVolatileLike(value) ? value.get() : value
   if (!Array.isArray(resolved)) return []
   return resolved.map((item) => String(item))
+}
+
+/**
+ * Read the confined-launch policy, falling back for anything outside the union.
+ *
+ * The fallback mirrors the schema default: a malformed profile value must keep
+ * Git Bash usable rather than leave the session without a terminal tool.
+ */
+function readConfinedPolicy(value: unknown): ConfinedPolicy {
+  const resolved = read<string>(value, 'unconfined')
+  if (resolved === 'escalate' || resolved === 'fail') return resolved
+  return 'unconfined'
 }
 
 /**
@@ -158,6 +181,7 @@ export function snapshotConfig(config: RawConfig): ConfigSnapshot {
     loginShell: read<boolean>(source.loginShell, false) === true,
     extraPath: readArray(source.extraPath),
     pythonUtf8: read<boolean>(source.pythonUtf8, true) !== false,
+    confinedPolicy: readConfinedPolicy(source.confinedPolicy),
     cwd: read<string>(source.cwd, '') || undefined,
     timeoutMs: read<number>(source.timeoutMs, DEFAULTS.timeoutMs),
     maxTimeoutMs: read<number>(source.maxTimeoutMs, DEFAULTS.maxTimeoutMs),
@@ -176,6 +200,7 @@ export function snapshotConfig(config: RawConfig): ConfigSnapshot {
  * attempt to freeze a function and fail validation.
  */
 export interface ExecutorArgs {
+  readonly confinedPolicy: ConfinedPolicy
   readonly cwd?: string
   readonly timeoutMs: number
   readonly maxTimeoutMs: number
@@ -187,6 +212,7 @@ export interface ExecutorArgs {
 /** Config fields the mounted executor inherits from this plugin's config. */
 export function executorConfig(snapshot: ConfigSnapshot): ExecutorArgs {
   return {
+    confinedPolicy: snapshot.confinedPolicy,
     cwd: snapshot.cwd,
     timeoutMs: snapshot.timeoutMs,
     maxTimeoutMs: snapshot.maxTimeoutMs,

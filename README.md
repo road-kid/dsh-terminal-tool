@@ -4,7 +4,7 @@
 
 设计取向：**一个开关、所有 preset 跟随、不动 preset 文件、不接管全局 `ctx.shell`**。默认 `dialect: pwsh`，装上去什么都不变；改成 `bash` 后，**新会话**拿到 `bash` 工具、`pwsh` 从该会话的工具目录里消失，已开的会话保持原状。
 
-> **临时替代方案**：DSH 目前没有内置的「终端 / Git Bash 选择」能力。**在官方能力落地前，本插件是它的临时替代方案**——用官方已发布的执行器与工具，把 Windows 上新会话的终端换成 Git Bash。**官方提供等价设置后即可停用本插件**：从 profile 依赖里移除本行并重启，新会话即回到官方终端工具。插件不改 DSH 安装目录、不改任何 preset、不接管全局 `ctx.shell`，配置只写进当前 profile 的 patch 层；卸载不需要清理任何全局状态。
+> **临时替代方案**：DSH 目前没有内置的「终端 / Git Bash 选择」能力。**在官方能力落地前，本插件是它的临时替代方案**——用官方已发布的执行器与工具，把 Windows 上新会话的终端换成 Git Bash；Windows 受限沙箱档位下的 `confinedPolicy` 同属这段临时接线。**官方提供等价设置后即可停用本插件**：从 profile 依赖里移除本行并重启，新会话即回到官方终端工具。插件不改 DSH 安装目录、不改任何 preset、不接管全局 `ctx.shell`，配置只写进当前 profile 的 patch 层；卸载不需要清理任何全局状态。
 
 ---
 
@@ -39,9 +39,10 @@ DSH 0.2.1-rc.2 的平台组合在 Windows 上是互斥的：
 
 插件本身不实现终端。它做四件事，全部复用第一方组件：
 
-1. **执行器**：`GitBashExecutor extends LocalBashExecutor`，只改两处——
+1. **执行器**：`GitBashExecutor extends LocalBashExecutor`，只改三处——
    - `execute()` 用配置的 `bash.exe` 绝对路径组 `[bash, -c, command]`（基类硬编码 `"bash"`，在 Windows 上会命中 `System32\bash.exe`，那是 WSL 启动器）；
-   - `resolve()` 注入 `PATH`（`spawnSpec` 里 `spec.env` 是唯一能塞 PATH 的位置）。
+   - `resolve()` 注入 `PATH`（`spawnSpec` 里 `spec.env` 是唯一能塞 PATH 的位置）；
+   - 受限档位下按 `confinedPolicy` 选择直接启动、走官方 `ctx.sandbox.confine()`，还是明确报错（见「受限沙箱策略」）。
 
    超时、输出收集与溢出、abort 分类、`dshEnv` 合并、结果整形全部继承，行为与官方 bash 执行器一致。
 
@@ -65,7 +66,7 @@ DSH 0.2.1-rc.2 的平台组合在 Windows 上是互斥的：
 - **不编辑 preset**：`preset-standard` 在 profile 里是完整快照，改它等于接管用户的组合文件，且升级会被覆盖。
 - **只对新会话生效**：工具与 prompt 是会话创建时装配的，运行中换不掉——这是 DSH 的语义，不是插件的取舍。
 - **`restrict` 只过滤继承层**：官方文档明确 "never what its OWN layer registers"，所以从 agent scope 调 `restrict({deny:['pwsh']})` 恰好只隐藏 preset 带进来的 `pwsh`，不影响本层注册的 `bash`。
-- **不绕过沙箱**：受限模式下仍走 `ctx.sandbox.confine()`，起不来就如实把官方错误交给模型。
+- **沙箱策略是显式配置，不由插件悄悄绕过**：默认 `confinedPolicy: unconfined` 在 Windows 受限档位下直接启动 Git Bash，命令因此不受文件沙箱约束——这是用户在设置里看得到、可改回的选择；`escalate` 仍走官方 `ctx.sandbox.confine()` 与官方审批，`fail` 明确报错。插件只把 MSYS 启动失败分类成 `denied`，不自己实现审批。
 
 ---
 
@@ -76,7 +77,7 @@ DSH 0.2.1-rc.2 的平台组合在 Windows 上是互斥的：
 - Windows + DSH Desktop `>=0.2.1-rc.2 <0.3.0`（`package.json` 的 `engines.dsh` 范围；本插件在此范围内开发与验证）
 - **Web shell 自带 `@deepseek-ai/dsh-client-ui-primitives`**：0.2.1-rc.2 起该包由 Web shell 的冻结模块表（`PLATFORM_MODULES`）播种，插件设置行的 bundle 像 `require('react')` 一样 `require()` 它，不会内联第二份 atoms。宿主升级到范围外时设置行可能加载失败，但 Host 半区的替换逻辑不依赖这张模块表
 - 本机已装 Git for Windows（或 MSYS2 / Cygwin）
-- 想用受限沙箱的话，见下面「已知限制」第 3 条
+- Windows 受限沙箱下 Git Bash 无法在沙箱内启动：默认 `confinedPolicy: unconfined` 直接启动（模型命令不受文件沙箱限制），也可选 `escalate`（官方审批）或 `fail`（报错），见「受限沙箱策略」
 
 ### 步骤
 
@@ -122,6 +123,7 @@ Git Bash 路径                    [C:/Program Files/Git/bin/bash.exe]  [自动�
 - **终端类型**是一枚官方下拉触发器（36px、`--dsw-radius-md`、`--dsw-alias-bg-module-platform`、chevron），点开是官方 `Menu`——与官方段里所有枚举型偏好的渲染方式相同。**默认 `pwsh`**：装插件本身不改变任何行为。
 - 选 `bash` 后才出现路径行。路径默认是官方 `Input`，直接填 `bash.exe` 的完整路径；「自动发现」命中多于一条时，输入框换成同一套下拉，列出全部可用路径。路径为空时有提示；扫描中按钮文案变为「正在扫描…」，扫不到会明确提示，而不是清空输入。
 - 已经选好的路径**不会**被后续扫描改写（除非它已失效）。
+- `bash` 时路径行之后还有 **受限沙箱时** 下拉（`unconfined` / `escalate` / `fail`，默认 `unconfined`）；选中 `unconfined` 会显示提示：模型执行的命令不受文件沙箱限制。三种取值的后果见「受限沙箱策略」。
 - **挂载时不扫描、不写配置**：扫描只在点「自动发现」时发生，并把选中的 `bashPath` 与可用列表 `bashCandidates` 原子写回；`/state` 只读配置，所以打开设置是瞬时的。运行中的会话保持启动时的终端类型——这是 DSH 的装配语义。
 - 能力或设置服务不可用时行内会说明原因（例如「当前 DSH 版本不支持自动切换：{reason}」）；配置只读时所有控件禁用。非 Windows 上整行不渲染。
 
@@ -132,7 +134,7 @@ Git Bash 路径                    [C:/Program Files/Git/bin/bash.exe]  [自动�
 | `POST /api/dsh-terminal-tool/state` | 平台、设置可用性、当前值、能力探测。**不扫描**，所以打开设置是瞬时的 |
 | `POST /api/dsh-terminal-tool/discover` | 用户点「自动发现」时才调用，返回全部可用候选 |
 
-Config 字段（设置行直接编辑 `dialect` 与 `bashPath`；点「自动发现」会原子写回 `bashPath` + `bashCandidates`；其余字段仍可直接写 profile patch）：
+Config 字段（设置行直接编辑 `dialect`、`confinedPolicy` 与 `bashPath`；点「自动发现」会原子写回 `bashPath` + `bashCandidates`；其余字段仍可直接写 profile patch）：
 
 | 字段 | 说明 |
 |---|---|
@@ -144,6 +146,7 @@ Config 字段（设置行直接编辑 `dialect` 与 `bashPath`；点「自动发
 | `loginShell` | 传 `-l`，读取登录 profile |
 | `extraPath` | 追加到子进程 PATH 的目录 |
 | `pythonUtf8` | 导出 `PYTHONIOENCODING=utf-8` |
+| `confinedPolicy` | Windows 受限档位下的处理方式：`unconfined`（默认，直接启动，不经文件沙箱）/ `escalate`（先走官方沙箱；首次失败返回官方 denial 提示，模型带 `sandbox_permissions` 重试并审批）/ `fail`（抛 `SandboxUnavailableError`，提示改配置） |
 | `timeoutMs` / `maxTimeoutMs` / `maxOutputBytes` / `maxSpillBytes` / `graceMs` | 继承自官方 bash 执行器的同名字段 |
 
 把 `dialect` 改成 `bash`，**新建会话**即可看到工具目录里是 `bash` 而不再是 `pwsh`。已开的会话不受影响。
@@ -172,6 +175,31 @@ Config 字段（设置行直接编辑 `dialect` 与 `bashPath`；点「自动发
 执行时子进程 PATH = `工具链 bin` → `usr\bin` → `bin` → `usr\local\bin` → `extraPath` → **宿主 PATH**。
 
 顺序是有意的：MSYS2 的 `git`/`ls`/`grep` 必须赢过 Windows 上的同名同源工具，而宿主 PATH 必须保留，否则 `node`/`python` 等原生命令会消失。去重按「小写 + 去尾分隔符 + `/`→`\`」归一化。
+
+---
+
+## 受限沙箱策略（`confinedPolicy`）
+
+Windows 的受限档位（`read-only` / `workspace-write`）把子进程降到 Low 完整性，MSYS2 运行时初始化命名共享内存时被拒，Git Bash 在命令执行前就退出：
+
+```
+bash.exe: *** fatal error - NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-…): 0xC0000022
+exit -1073741502
+```
+
+`confinedPolicy` 决定插件此时怎么走：
+
+| 值 | 行为 | 代价 |
+|---|---|---|
+| `unconfined`（默认） | 直接以普通权限启动 Git Bash，不调用 `ctx.sandbox.confine()` | 一次调用即成功；模型执行的命令**不受文件沙箱限制** |
+| `escalate` | 先按官方方式进入沙箱；MSYS 启动失败被标为 `denied`，模型收到官方升级提示后带 `sandbox_permissions: danger-full-access` 重试，由宿主审批 | 首次失败 + 一次审批往返 |
+| `fail` | 抛 `SandboxUnavailableError`，错误信息提示把 `confinedPolicy` 改成 `unconfined`，或带 `sandbox_permissions: danger-full-access` 重试 | 明确报错，不自动重试 |
+
+**结果事实**：`unconfined` 直启时结果仍带当前会话档位的 `sandbox.mode`，但 `sandbox.enforcement` 标记为 `partial`（宿主官方枚举里最接近的一档），不会让调用方误以为这一层边界完整；`escalate` 保持官方 `full`/`partial` 原值。
+
+**安全含义**：`unconfined` 是默认值是显式的产品选择——Windows 受限档位下不这样就没有可用的 Git Bash；它意味着模型通过 `bash` 执行的命令不受文件沙箱约束。需要沙箱约束时选 `escalate`（官方审批）或 `fail`（拒绝执行）。设置行在选中 `unconfined` 时会显示同样的提示。
+
+`escalate` 的审批完全由第一方 `dsh-tool-bash` 负责：`approveEscalation` 在 `execute` 之前调用，批准后以 `danger-full-access` 的 `sandboxPolicy` 进入执行器。插件只把 MSYS 启动失败分类成 `denied`，不自己实现审批，也不修改宿主的沙箱实现。判定同时看退出码（`3221225794` / `3221225506`）与 stderr 签名（`ntcreatedirectoryobject(\basenamedobjects\msys-` / `couldn't create signal pipe`），前台与后台一致。
 
 ---
 
@@ -208,12 +236,12 @@ Config 字段（设置行直接编辑 `dialect` 与 `bashPath`；点「自动发
 
 1. **仅 Windows**。非 Windows 上 patch 行的 `disabled` 为真，插件根本不加载。
 2. **只对新会话生效**。工具与 prompt 段是会话创建时装配的，运行中无法替换。
-3. **受限沙箱下 Git Bash 起不来**。`read-only` / `workspace-write` 用受限令牌执行，MSYS2 无法创建 `BaseNamedObjects`：
+3. **受限沙箱下 Git Bash 无法直接进入沙箱**。`read-only` / `workspace-write` 用受限令牌执行，MSYS2 无法创建 `BaseNamedObjects`：
    ```
    bash.exe: *** fatal error - NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-…): 0xC0000022
    exit -1073741502
    ```
-   需要 `danger-full-access`。**这是宿主沙箱行为，与插件无关**，插件不会绕过它。
+   **这是宿主沙箱行为，与插件无关**，插件不修改它。默认 `confinedPolicy: unconfined` 会直接启动 Git Bash，代价是模型命令不受文件沙箱限制；改选 `escalate` 则走官方审批，改选 `fail` 则直接报错。详见「受限沙箱策略」。
 4. **原生 Windows 程序输出可能乱码**。`cmd`/`tasklist`/`powershell` 按 ANSI 代码页（中文系统为 936）写管道，DSH 按 UTF-8 解码 → 中文乱码；`chcp 65001` 无效。仅 Python 可用 `PYTHONIOENCODING` 缓解（默认已开）。
 5. **`cmd /c` 会被 MSYS 参数改写**，需写 `cmd //c` 或设 `MSYS2_ARG_CONV_EXCL='*'`。
 6. **首次安装必须重启 DSH**（理由见「安装」）。
@@ -230,6 +258,7 @@ src/config.ts     schemastery Config（全 volatile）+ 会话级快照
 src/discover.ts   Git Bash 自动发现（含 WSL 排除）
 src/paths.ts      路径算术：安装根、PATH 条目、校验、PATH 合成
 src/executor.ts   GitBashExecutor（继承 LocalBashExecutor，含沙箱分支）
+src/confined.ts   受限沙箱启动决策（planLaunch）与 MSYS 启动失败签名
 src/replace.ts    每会话替换 + 逆序回滚
 src/diag.ts       诊断日志
 src/types.ts      共享类型
@@ -246,10 +275,10 @@ npm run typecheck     # tsc --noEmit（devDeps 钉 0.2.1-rc.2 真 .d.ts，含官
 npm run build         # esbuild → lib/index.js（Host ESM）+ lib/client.js（客户端半区；react 与官方 UI atoms 均保持 external）
 npm run contractcheck # Config 全 volatile / patch 行 / 导出面 / 客户端半区装载形状 / bundle 未内联第一方 / atom specifier 保持 external（15 项）
 npm run clientsmoke   # 真实执行 lib/client.js：模块装载形状、react 与 atom external、apply 注册行、无 configForms 时降级、迟到服务替换、HMR 幂等（8 项）
-npm run rowselftest   # 行状态机 13 项：/state 读取、乐观写入、自动发现持久化、各类失败提示
-npm run rendertest    # 在 jsdom 里真实渲染并点击：按 role/aria 断言下拉触发器、菜单项与路径 Input（9 项；官方 atoms 由 scripts/primitives-double.mjs 顶替）
-npm run selftest      # 路径、发现、快照、/api 路由注册 28 项
-npm run integration   # 在真实第一方服务上跑完整替换流程（5 项）
+npm run rowselftest   # 行状态机 15 项：/state 读取、乐观写入、自动发现持久化、各类失败提示
+npm run rendertest    # 在 jsdom 里真实渲染并点击：按 role/aria 断言下拉触发器、菜单项与路径 Input（11 项；官方 atoms 由 scripts/primitives-double.mjs 顶替）
+npm run selftest      # 路径、发现、快照、受限启动决策、/api 路由注册 35 项
+npm run integration   # 在真实第一方服务上跑完整替换流程（7 项）
 npm run check         # typecheck → build → contractcheck → clientsmoke → selftest → rowselftest → rendertest → integration
 ```
 

@@ -8,7 +8,14 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import { createRowController, knownPaths, type Dialect, type RowController, type RowState } from './store.ts'
+import {
+  createRowController,
+  knownPaths,
+  type Dialect,
+  type RowController,
+  type RowState,
+} from './store.ts'
+import type { ConfinedPolicy } from '../confined.ts'
 import { injectStyles } from './styles.ts'
 import type { RowProps } from './types.ts'
 
@@ -146,6 +153,11 @@ export function TerminalToolRow({ t, form }: RowProps): ReactElement | null {
     { id: 'bash', label: t('row.dialect.bash') },
   ]
   const pathItems: readonly MenuEntry[] = paths.map((path) => ({ id: path, label: path }))
+  const confinedItems: readonly MenuEntry[] = [
+    { id: 'unconfined', label: t('row.confined.unconfined') },
+    { id: 'escalate', label: t('row.confined.escalate') },
+    { id: 'fail', label: t('row.confined.fail') },
+  ]
 
   return (
     <div className="tterm-group" data-dsh-terminal-tool="row">
@@ -180,51 +192,78 @@ export function TerminalToolRow({ t, form }: RowProps): ReactElement | null {
       </div>
 
       {dialect === 'bash' ? (
-        <div className="tterm-row">
-          <div className="tterm-text">
-            <div className="tterm-field-label">{t('row.path.label')}</div>
-            {bashPath === '' ? <div className="tterm-hint">{t('row.path.missing')}</div> : null}
+        <>
+          <div className="tterm-row">
+            <div className="tterm-text">
+              <div className="tterm-field-label">{t('row.path.label')}</div>
+              {bashPath === '' ? <div className="tterm-hint">{t('row.path.missing')}</div> : null}
+            </div>
+
+            <div className="tterm-path-control">
+              {paths.length > 1 ? (
+                <Selector
+                  className="tterm-path-selector"
+                  label={t('row.path.label')}
+                  value={bashPath === '' ? t('row.path.none') : bashPath}
+                  items={pathItems}
+                  selectedId={bashPath}
+                  disabled={!controlsEnabled}
+                  onSelect={(path) => {
+                    if (path !== bashPath) controller.setBashPath(path)
+                  }}
+                />
+              ) : (
+                <Input
+                  id={PATH_CONTROL_ID}
+                  className="tterm-path-input"
+                  type="text"
+                  spellCheck={false}
+                  autoComplete="off"
+                  aria-label={t('row.path.label')}
+                  placeholder={t('row.path.placeholder')}
+                  value={draft}
+                  disabled={!controlsEnabled}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onBlur={commitPath}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      commitPath()
+                    }
+                  }}
+                />
+              )}
+              <Button variant="outline" size="sm" disabled={!controlsEnabled} onClick={() => controller.discover()}>
+                {state.discovering ? t('row.discovering') : t('row.discover')}
+              </Button>
+            </div>
           </div>
 
-          <div className="tterm-path-control">
-            {paths.length > 1 ? (
-              <Selector
-                className="tterm-path-selector"
-                label={t('row.path.label')}
-                value={bashPath === '' ? t('row.path.none') : bashPath}
-                items={pathItems}
-                selectedId={bashPath}
-                disabled={!controlsEnabled}
-                onSelect={(path) => {
-                  if (path !== bashPath) controller.setBashPath(path)
-                }}
-              />
-            ) : (
-              <Input
-                id={PATH_CONTROL_ID}
-                className="tterm-path-input"
-                type="text"
-                spellCheck={false}
-                autoComplete="off"
-                aria-label={t('row.path.label')}
-                placeholder={t('row.path.placeholder')}
-                value={draft}
-                disabled={!controlsEnabled}
-                onChange={(event) => setDraft(event.target.value)}
-                onBlur={commitPath}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    commitPath()
-                  }
-                }}
-              />
-            )}
-            <Button variant="outline" size="sm" disabled={!controlsEnabled} onClick={() => controller.discover()}>
-              {state.discovering ? t('row.discovering') : t('row.discover')}
-            </Button>
+          <div className="tterm-row">
+            <div className="tterm-text">
+              <div className="tterm-field-label">{t('row.confined.label')}</div>
+              <div className="tterm-description">{t('row.confined.description')}</div>
+              {state.confinedPolicy === 'unconfined' ? (
+                <div className="tterm-hint" role="note">
+                  {t('row.confined.unconfinedNotice')}
+                </div>
+              ) : null}
+            </div>
+
+            <Selector
+              className="tterm-dialect"
+              label={t('row.confined.label')}
+              value={t(`row.confined.${state.confinedPolicy}`)}
+              items={confinedItems}
+              selectedId={state.confinedPolicy}
+              disabled={!controlsEnabled}
+              onSelect={(id) => {
+                const next: ConfinedPolicy = id === 'escalate' ? 'escalate' : id === 'fail' ? 'fail' : 'unconfined'
+                if (next !== state.confinedPolicy) controller.setConfinedPolicy(next)
+              }}
+            />
           </div>
-        </div>
+        </>
       ) : null}
     </div>
   )

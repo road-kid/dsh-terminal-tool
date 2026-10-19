@@ -17,6 +17,7 @@ import type {
   ShellRunResult,
 } from '@deepseek-ai/dsh-shell'
 import { composePath } from './paths.ts'
+import { isMsysStartupDenial, planLaunch, type ConfinedPolicy } from './confined.ts'
 
 /**
  * A `LocalBashExecutor` that runs a specific bash executable instead of
@@ -56,6 +57,8 @@ export interface GitBashExecutorConfig extends BashLocalConfig {
   readonly loginShell: boolean
   /** Export PYTHONIOENCODING. */
   readonly pythonUtf8: boolean
+  /** How to launch under a confined Windows sandbox. Defaults to `unconfined`. */
+  readonly confinedPolicy?: ConfinedPolicy
 }
 
 /** What the sandbox reported for one execution, remembered until the process settles. */
@@ -101,6 +104,10 @@ export class GitBashExecutor extends LocalBashExecutor {
 
   private get pythonUtf8(): boolean {
     return this.extended.pythonUtf8 !== false
+  }
+
+  private get confinedPolicy(): ConfinedPolicy {
+    return this.extended.confinedPolicy ?? 'unconfined'
   }
 
   private get sandbox(): SandboxProvider | undefined {
@@ -153,16 +160,47 @@ export class GitBashExecutor extends LocalBashExecutor {
     const sandbox = this.sandbox
     const policy = spec.sandboxPolicy
     const argv = this.argv(spec)
+    const plan = planLaunch({
+      hasSandbox: sandbox !== undefined,
+      policyMode: policy?.mode,
+      choice: this.confinedPolicy,
+      platform: process.platform,
+    })
 
-    // Unconfined: no provider, no policy, or an explicit escalation past the
-    // sandbox. The argv is still ours, which is the whole point of this class.
-    if (sandbox === undefined || policy === undefined || policy.mode === 'danger-full-access') {
+    // Direct: no provider, no policy, an explicit escalation past the sandbox,
+    // or a confined Windows policy that opts out. The argv is still ours, which
+    // is the whole point of this class.
+    if (plan.kind === 'direct') {
       const mode: SandboxMode = policy?.mode ?? 'danger-full-access'
+      // A direct launch under a confined policy means this child is not sandboxed
+      // at all. Keep the policy mode (it is still the standing session mode) but
+      // report partial enforcement instead of implying a full boundary, so a
+      // consumer that needs the absolute boundary can tell what happened.
+      const bypassed = policy !== undefined && policy.mode !== 'danger-full-access'
+      const facts = bypassed ? { mode, denied: false, enforcement: 'partial' as const } : { mode, denied: false }
       const execution = await this.executeArgv(spec, argv)
-      return decorateResult(execution, (result) => ({ ...result, sandbox: { mode, denied: false } }))
+      return decorateResult(execution, (result) => ({ ...result, sandbox: facts }))
+    }
+
+    // Fail: a confined Windows launch whose configured policy refuses to run.
+    // `planLaunch` only returns this for a resolved confined policy.
+    if (plan.kind === 'fail') {
+      if (policy === undefined || policy.mode === 'danger-full-access') {
+        throw new Error('confined launch plan without a confined sandbox policy')
+      }
+      throw new SandboxUnavailableError(policy.mode, plan.reason)
+    }
+
+    // `planLaunch` only chooses `confine` when both are present; the guard keeps
+    // the types honest without duplicating the decision.
+    if (sandbox === undefined || policy === undefined) {
+      throw new Error('confined launch plan without a sandbox provider or policy')
     }
 
     const mode = policy.mode
+    if (mode === 'danger-full-access') {
+      throw new Error('confined launch plan with an unconfined sandbox policy')
+    }
     const confinedPolicy: SandboxPolicy = { ...policy, mode }
 
     let confined: ConfinedArgv | undefined
@@ -202,7 +240,9 @@ export class GitBashExecutor extends LocalBashExecutor {
           ...result,
           sandbox: {
             mode,
-            denied: matchesSignature(result.exitCode, result.stderr.text, confined.denialSignatures),
+            denied:
+              matchesSignature(result.exitCode, result.stderr.text, confined.denialSignatures) ||
+              isMsysStartupDenial(result.exitCode, result.stderr.text),
             enforcement: confined.enforcement,
           },
         }
@@ -232,7 +272,10 @@ export class GitBashExecutor extends LocalBashExecutor {
         : classifyRunnerFailureMatch(process.exitCode, stderr, facts.runnerFailureRules) !== undefined
       process.sandbox = {
         mode: facts.mode,
-        denied: !runnerFailed && matchesSignature(process.exitCode, stderr, facts.denialSignatures),
+        denied:
+          !runnerFailed &&
+          (matchesSignature(process.exitCode, stderr, facts.denialSignatures) ||
+            isMsysStartupDenial(process.exitCode, stderr)),
         enforcement: facts.enforcement,
         ...(runnerFailed ? { runnerFailed: true } : {}),
       }

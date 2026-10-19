@@ -43,6 +43,7 @@ export interface TerminalToolValues {
   readonly dialect?: 'pwsh' | 'bash'
   readonly bashPath?: string
   readonly bashCandidates?: readonly string[]
+  readonly confinedPolicy?: 'unconfined' | 'escalate' | 'fail'
 }
 
 /** A locale dictionary. */

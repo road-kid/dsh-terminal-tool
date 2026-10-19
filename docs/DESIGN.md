@@ -6,9 +6,9 @@
 | 插件 entry id | `terminal-tool` |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0`（Windows / Desktop profile） |
 | 契约基线 | 各第一方包 `lib/types/*.d.ts`（0.2.1-rc.2，npm 实数） |
-| 文档状态 | 实现定稿（0.3.0） |
+| 文档状态 | 实现定稿（0.4.0） |
 
-> **临时替代方案**：DSH 还没有内置的「终端 / Git Bash 选择」能力，Windows 上平台组合只提供 PowerShell。**在官方能力落地前，本插件是它的临时替代方案**：复用官方执行器与工具，在 `agent/created` 里把新会话的终端换成 Git Bash。**官方提供等价设置后即可停用本插件**——移除 profile 里的插件行并重启，新会话即回到官方终端工具。插件不改 DSH 安装目录、不改任何 preset、不接管全局 `ctx.shell`，配置只落当前 profile 的 patch 层，卸载无残留。
+> **临时替代方案**：DSH 还没有内置的「终端 / Git Bash 选择」能力，Windows 上平台组合只提供 PowerShell。**在官方能力落地前，本插件是它的临时替代方案**：复用官方执行器与工具，在 `agent/created` 里把新会话的终端换成 Git Bash；Windows 受限档位下的 `confinedPolicy` 也属于这段临时接线，不改变宿主沙箱本身。**官方提供等价设置后即可停用本插件**——移除 profile 里的插件行并重启，新会话即回到官方终端工具。插件不改 DSH 安装目录、不改任何 preset、不接管全局 `ctx.shell`，配置只落当前 profile 的 patch 层，卸载无残留。
 
 ---
 
@@ -40,11 +40,12 @@ DSH 在 Windows 上只组合 PowerShell 执行器：`@deepseek-ai/dsh-base` 的�
 | F12 | 只对新会话生效 | 每个 `agent/created` 读取一次配置快照 |
 | F13 | 诊断日志 | `%TEMP%\dsh-terminal-tool.log`，`DSH_TERMINAL_TOOL_DIAG_FILE` 可改道 |
 | F14 | 原生 Windows 程序中文输出乱码缓解 | 注入 `PYTHONIOENCODING=utf-8`（仅当未设置） |
+| F15 | 受限沙箱策略：`unconfined` / `escalate` / `fail`，默认 `unconfined` | `src/confined.ts` 的 `planLaunch` + 执行器分支 |
 
 ### 1.3 明确不做
 
 - 不接管全局 `ctx.shell`，不动 `dsh-base` / 任何 preset 快照，不改 DSH 安装目录。
-- 不改写「必须 danger-full-access 才能跑 Git Bash」这一宿主事实（属沙箱策略，插件不绕过）。
+- 不修改宿主沙箱实现，也不自行实现升级审批：`escalate` 的 `approveEscalation` 仍由第一方 `dsh-tool-bash` 负责，插件只把 MSYS 启动失败标成 `denied`。默认 `unconfined` 会绕过文件沙箱，但这是配置面的显式选择（见 2.4），不是隐式旁路。
 - 不提供 `minimal` preset 的持久 shell 等价物（其 PTY 绑在 preset 私有 isolate realm，外部插件无法只换后端）。
 
 ---
@@ -59,9 +60,10 @@ bash 那一套」的接线。因此本项目的每条行为都跑在第一方代
 |---|---|
 | bash 工具本体（~65 KB） | **直接挂载官方 `@deepseek-ai/dsh-tool-bash`** |
 | 沙箱升级 / 拒绝标记 | 官方工具自带 |
+| 受限沙箱启动决策 | 自写 `src/confined.ts`（`planLaunch` / `isMsysStartupDenial`）；审批仍归官方 `tool-bash` |
 | 后台任务 / 转后台 / 会话 cwd | 官方工具自带 |
 | 工具卡片渲染 | 官方 `tool.call.toolview` 的 `bash` 槽 |
-| 执行器（argv 里那把 bash） | **继承官方 `LocalBashExecutor`，只重写 argv 与 env** |
+| 执行器（argv 里那把 bash） | **继承官方 `LocalBashExecutor`，只重写 argv / env 与受限启动分支** |
 | 类型 | 官方 `.d.ts`（devDependency，精确钉 `0.2.1-rc.2`） |
 | 设置 UI | **自写客户端半区**（`src/client/`）：向 `settings.general.item` 注册「终端工具」行；控件全部复用官方 `@deepseek-ai/dsh-client-ui-primitives`（`Button` / `Input` / `Menu` / `IconChevronDownOutlineRegular`） |
 | 工具隐藏 / 提示词裁剪 | 官方 `tools.restrict()` / `systemPrompt.section()` |
@@ -151,6 +153,16 @@ return this.extend({ [symbols.isolate]: shadow });
   宿主提供，插件不安装任何运行时依赖。目标宿主范围为 `>=0.2.1-rc.2 <0.3.0`
   （`engines.dsh`），该范围内 Web shell 都自带这个模块表。
 
+### 2.4 关键取舍：受限档位默认 `unconfined`，而不是一律走官方升级
+
+MSYS2 在 Windows 受限档位下初始化命名共享内存就被拒，这不是偶发失败，而是**每次启动都失败**。因此三种策略的取舍是：
+
+- **`unconfined`（默认）**：win32 + 受限档位时直接启动 Git Bash，一次调用即成功。代价写在明面上：模型执行的命令不受文件沙箱约束。默认选它，是因为不这样受限档位下就没有可用的 Git Bash；设置行会在选中时显示同样的提示，用户可随时改回。
+- **`escalate`**：先按官方方式 `ctx.sandbox.confine()`；失败标 `denied`，模型收到官方 denial 提示后带 `sandbox_permissions: danger-full-access` 重试，由第一方 `dsh-tool-bash` 的 `approveEscalation` 审批。保留完整沙箱语义，代价是每次都要首次失败加一次审批往返。
+- **`fail`**：抛 `SandboxUnavailableError`，错误信息指导改配置。给需要「宁可不可用也不降级」的环境。
+
+审批不重复实现：`approveEscalation` 在官方工具 `execute` 之前调用，批准后以 `danger-full-access` 的 `sandboxPolicy` 进入 `GitBashExecutor`。插件只负责把 MSYS 崩溃分类成 `denied`，不碰审批，也不修改宿主沙箱实现。非 Windows 或非受限档位不受 `confinedPolicy` 影响。
+
 ---
 
 ## 3. 架构
@@ -178,14 +190,14 @@ return this.extend({ [symbols.isolate]: shadow });
                  │tool-bash │ └─────────┘ └───────────────┘
                  └──────────┘
                         │
-                 ┌──────▼──────────────────────────────┐
+                 ┌──────▼───────────────────────────────┐
                  │ src/executor.ts                      │
                  │ class GitBashExecutor extends        │
                  │   LocalBashExecutor                  │
                  │  ├ resolve(): 补 env(PATH/PYTHONIO…) │
                  │  ├ execute(): executeArgv([bashPath, │
                  │  │            '-c', command])        │
-                 │  └ 受限模式: ctx.sandbox.confine(argv)│
+                 │  └ planLaunch(): direct/confine/fail │
                  └──────────────────────────────────────┘
 ```
 
@@ -198,6 +210,7 @@ return this.extend({ [symbols.isolate]: shadow });
 | `src/discover.ts` | Git Bash 发现、WSL 硬排除、候选排序 | ~220 |
 | `src/paths.ts` | `bashInstallRoot` / `bashPathEntries` / `composePath` / `pathKey` | ~120 |
 | `src/executor.ts` | `GitBashExecutor extends LocalBashExecutor`（含沙箱分支） | ~170 |
+| `src/confined.ts` | 受限启动决策 `planLaunch` 与 MSYS 启动失败签名分类 | ~80 |
 | `src/replace.ts` | 每会话替换：校验、isolate、挂载、restrict、section、回滚 | ~200 |
 | `src/diag.ts` | 诊断日志（文件 + `DSH_TERMINAL_TOOL_DIAG_FILE`） | ~60 |
 | `src/types.ts` | 内部类型与可选服务的最窄投影 | ~80 |
@@ -228,7 +241,7 @@ return this.extend({ [symbols.isolate]: shadow });
 设置 → 通用 → 终端工具（lib/client.js）
   ├── 挂载：POST /api/dsh-terminal-tool/state（只读，不扫描）
   │        + configForms.get('terminal-tool') 的 snapshot（值更可信）
-  ├── 选择方言 / 提交路径 / 点「自动发现」：
+  ├── 选择方言 / 受限策略 / 提交路径 / 点「自动发现」：
   │        POST /api/dsh-terminal-tool/discover（仅此时扫描）
   │        然后 configForms.mutate([...]) 一次原子写回（profile patch 层）
   └── 渲染：官方 Button / Input / Menu / IconChevronDownOutlineRegular
@@ -259,6 +272,8 @@ export const Config = z.object({
   loginShell:    z.boolean().default(false).volatile(),                   // 是否 -l 登录壳
   extraPath:     z.array(z.string()).default([]).volatile(),              // 追加进 PATH
   pythonUtf8:    z.boolean().default(true).volatile(),                    // F14
+  confinedPolicy: z.union(['unconfined', 'escalate', 'fail'] as const)
+                   .default('unconfined').volatile(),                     // F15
 })
 ```
 
@@ -267,6 +282,9 @@ export const Config = z.object({
 - `bashPath` 为空且 `autoDiscover` 为真 → 每次新会话按 `bashCandidates` + 内置发现顺序解析；
   **会话装配路径不写回配置**（避免插件在只读/钩子路径上改 profile），但会写一行诊断。
   写回只发生在用户点「自动发现」时（见 D1）。
+- `confinedPolicy` 只在 win32 + 受限档位下生效：`unconfined`（默认）直接启动，模型命令不受
+  文件沙箱限制；`escalate` 走官方沙箱与官方审批；`fail` 抛 `SandboxUnavailableError`。
+  非法值在快照时回退 `unconfined`，与 schema 默认一致。
 - 任一字段非法（如路径指向 WSL）→ 该会话跳过替换，会话保持 pwsh。
 
 ---
@@ -332,17 +350,32 @@ export class GitBashExecutor extends LocalBashExecutor {
 }
 ```
 
-- **只能重写 argv 与 env**：`LocalBashExecutor.execute()` 里的超时分类、输出收集、
+- **只重写少量扩展点**：`LocalBashExecutor.execute()` 里的超时分类、输出收集、
   `onProcessDone` 钩子、`result()` 投影全部继承官方实现，不复制。
 - 扩展点合法性：`protected executeArgv(spec, argvOrPrepare, onStarted?)` 是官方
   `lib/types/index.d.ts` 里声明的 protected 成员，子类重写 `execute()` 调它是**设计内**用法。
-- **沙箱分支**：若 `spec.sandboxPolicy.mode === 'danger-full-access'` → 直接
-  `executeArgv(spec, argv)`；否则
-  `ctx.sandbox.confine(argv, policy, signal)` 取 `.argv` 再执行，并沿用官方
-  `@deepseek-ai/dsh-sandbox` 的 `classifyRunnerFailure` / `isRunnerSpawnFailure` /
-  `SandboxUnavailableError` / 拒绝签名匹配来产出 `result.sandbox`
-  （`{mode, denied, enforcement, runnerFailed?}`）。`sandboxMode` getter 返回
-  `ctx.sandboxPolicy.defaultMode` —— 这是工具层决定是否暴露 `sandbox_permissions` 的依据（F6）。
+- **沙箱分支**：`execute()` 先用
+  `planLaunch({ hasSandbox: this.sandbox !== undefined, policyMode: policy?.mode, choice: this.confinedPolicy, platform: process.platform })`
+  决策：无沙箱 / 无 policy → `direct`；`danger-full-access` → `direct`（原有行为）；
+  非 win32 → `confine`；win32 + 受限档位按 `unconfined` → `direct`、`escalate` → `confine`、
+  `fail` → 抛 `SandboxUnavailableError`。
+  - `direct`：直接 `executeArgv(spec, argv)`，结果保持 `sandbox: { mode, denied: false }`
+    （无 policy 时 `mode` 取 `danger-full-access`）。若这次直启是受限档位下 `unconfined`
+    主动选择的，则额外标 `enforcement: 'partial'`，避免调用方把这次调用误认为边界完整；
+    `escalate`/`confine` 路径仍透传官方 `enforcement`。
+  - `confine`：`ctx.sandbox.confine(argv, policy, signal)` 取 `.argv` 再执行，并沿用官方
+    `@deepseek-ai/dsh-sandbox` 的 `classifyRunnerFailure` / `isRunnerSpawnFailure` /
+    `SandboxUnavailableError` / 拒绝签名匹配来产出 `result.sandbox`
+    （`{mode, denied, enforcement, runnerFailed?}`）。
+  - `fail`：错误信息指导改 `confinedPolicy`，或带 `sandbox_permissions: danger-full-access`
+    重试；不自动重试。
+
+  `sandboxMode` getter 返回 `ctx.sandboxPolicy.defaultMode` —— 这是工具层决定是否暴露
+  `sandbox_permissions` 的依据（F6）。
+- **MSYS 启动失败分类**：`onProcessDone` 计算 `denied` 时同时匹配官方拒绝签名与
+  `isMsysStartupDenial(exitCode, stderr)`。后者在退出码为 `3221225794` / `3221225506`，
+  或 stderr（小写后）含 `ntcreatedirectoryobject(\basenamedobjects\msys-` /
+  `couldn't create signal pipe` 时命中；前台与后台一致。
 - **不硬编码 `bash`**：argv[0] 用解析出的绝对路径，绕开「PATH 上 `bash` 常命中 WSL 启动器」
   这个陷阱。
 
@@ -391,7 +424,7 @@ Git Bash 的 `git`/`ls`/`grep` 需要 `Git\bin`、`Git\usr\bin`、以及 `ucrt64
 | 缺少某个可选服务 | `ctx.get(...)` 判空后逐项门禁，缺一个只影响对应动作 |
 | 挂载工具失败 | 逆序回滚已完成的动作，写诊断 |
 | 命令超时 | 官方工具语义：`promoteOnTimeout` → 转后台 |
-| 受限沙箱下 Git Bash 起不来 | 属宿主沙箱事实（`NtCreateDirectoryObject … 0xC0000022` / `couldn't create signal pipe`），本插件只把官方错误呈现给模型，不绕过策略 |
+| 受限沙箱下 Git Bash 启动失败 | 按 `confinedPolicy` 处理：`unconfined` 直接启动（命令不受文件沙箱限制）；`escalate` 标 `denied`，交给官方升级与审批链路；`fail` 抛 `SandboxUnavailableError`。不修改沙箱本身 |
 | 诊断日志 | `%TEMP%\dsh-terminal-tool.log`；`DSH_TERMINAL_TOOL_DIAG_FILE` 优先 |
 
 测试记录与生产日志分离：自测脚本一律设 `DSH_TERMINAL_TOOL_DIAG_FILE` 到临时文件。
@@ -415,13 +448,13 @@ Git Bash 的 `git`/`ls`/`grep` 需要 `Git\bin`、`Git\usr\bin`、以及 `ucrt64
 | 层 | 手段 | 断言 |
 |---|---|---|
 | 类型 | `tsc --noEmit`（devDeps 钉 `@deepseek-ai/*@0.2.1-rc.2` 的真实 `.d.ts`） | 0 error |
-| 纯逻辑单测 | `node scripts/selftest.mjs` | 发现顺序、WSL 排除、路径校验、PATH 去重、env 组装、`/state` 与 `/discover` 的 handler、两条路由的注册与降级（28 项） |
+| 纯逻辑单测 | `node scripts/selftest.mjs` | 发现顺序、WSL 排除、路径校验、PATH 去重、env 组装、受限策略快照与 `planLaunch` 决策、MSYS 启动失败签名、`/state` 与 `/discover` 的 handler、两条路由的注册与降级（35 项） |
 | 执行器 | `scripts/integration.mjs` 在真实 `tool-bash` 下起真 Git Bash | `echo "$BASH_VERSION"` / `uname -s` → `MINGW64_NT-…` |
 | 契约 | `node scripts/contractcheck.mjs` | Config 字段全 volatile；patch 行 id/name/disabled 正确；导出面完整；客户端 bundle 装载形状；bundle 未内联第一方；`react` 与官方 atoms specifier 保持 external（15 项） |
 | 客户端半区 | `node scripts/clientsmoke.mjs` | 真实执行 `lib/client.js`：模块 id、`react` 与官方 UI atoms external、`inject` 面、`apply` 注册 `settings.general.item`、无 `configForms` 时降级为只读、迟到 `configForms` 替换而非叠加、重复 `apply` 幂等（8 项） |
-| 行状态机 | `node scripts/rowselftest.mjs` | `/state` 读入、平台决定显隐、乐观写入、revision 冲突与抛错提示、自动发现持久化候选、发现为空（13 项） |
-| 行渲染 | `node scripts/rendertest.mjs` | jsdom + React 18 真实渲染 `lib/client.js` 导出的组件，按 role/aria 断言：标题与描述、方言下拉触发器（`button[aria-haspopup="menu"]`）、`role="menuitem"`、选 bash 出路径行、路径 `input[aria-label="Git Bash 路径"]`、Enter 提交、自动发现变下拉、发现为空、非 Windows 不渲染、只读禁用（9 项）。官方 atoms 由行为级替身 `scripts/primitives-double.mjs` 提供，断言不依赖 CSS 类名 |
-| 集成 | `node scripts/integration.mjs`：真实 `dsh-tools` / `dsh-system-prompt` / `dsh-tool-bash` / `dsh-scope` 挂在一次性 cordis 应用里 | `bash` 出现且 `pwsh` 消失、祖先 scope 仍见 `pwsh`、prompt 段被清空、真命令跑在 Git Bash 上、二次 install 幂等、`dialect=pwsh` 完全不替换、`apply()` 接线 `agent/created`+`agent/disposed`（5 项） |
+| 行状态机 | `node scripts/rowselftest.mjs` | `/state` 读入、平台决定显隐、乐观写入、受限策略同步与写入、revision 冲突与抛错提示、自动发现持久化候选、发现为空（15 项） |
+| 行渲染 | `node scripts/rendertest.mjs` | jsdom + React 18 真实渲染 `lib/client.js` 导出的组件，按 role/aria 断言：标题与描述、方言下拉触发器（`button[aria-haspopup="menu"]`）、`role="menuitem"`、选 bash 出路径行、受限策略下拉与切换写回、路径 `input[aria-label="Git Bash 路径"]`、Enter 提交、自动发现变下拉、发现为空、非 Windows 不渲染、只读禁用（11 项）。官方 atoms 由行为级替身 `scripts/primitives-double.mjs` 提供，断言不依赖 CSS 类名 |
+| 集成 | `node scripts/integration.mjs`：真实 `dsh-tools` / `dsh-system-prompt` / `dsh-tool-bash` / `dsh-scope` 挂在一次性 cordis 应用里 | `bash` 出现且 `pwsh` 消失、祖先 scope 仍见 `pwsh`、prompt 段被清空、真命令跑在 Git Bash 上、二次 install 幂等、`dialect=pwsh` 完全不替换、`unconfined` 不调用 `confine`、`escalate` 的 MSYS 崩溃标 `denied`、`apply()` 接线 `agent/created`+`agent/disposed`（7 项） |
 | 人工 | 装进 profile + 重启 + 新会话 | 模型工具目录只有 `bash`；卡片与退出码正常；`dialect=pwsh` 时完全复原 |
 
 ---
@@ -462,8 +495,9 @@ dsh-terminal-tool/
 2. 只对新会话生效。
 3. `minimal` preset 的持久 shell 会退化为一次性 shell。
 4. 受限沙箱（read-only / workspace-write）下 MSYS2 无法创建 BaseNamedObjects，
-   Git Bash 起不来：`NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-…): 0xC0000022`，
-   `exit -1073741502`。需要 `danger-full-access`。**这是宿主沙箱行为，与插件无关**。
+   Git Bash 无法在沙箱内启动：`NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-…): 0xC0000022`，
+   `exit -1073741502`。**这是宿主沙箱行为，与插件无关**。默认 `confinedPolicy: unconfined`
+   直接启动 Git Bash（模型命令不受文件沙箱限制）；`escalate` 走官方审批；`fail` 明确报错。
 5. 原生 Windows 程序（`cmd`/`tasklist`/`powershell`）按 ANSI 代码页（中文 936）写管道，
    DSH 按 UTF-8 解码 → 中文乱码；`chcp 65001` 无效。仅缓解 Python（`PYTHONIOENCODING`）。
 6. `cmd /c` 会被 MSYS 参数改写，需 `cmd //c` 或 `MSYS2_ARG_CONV_EXCL='*'`。
